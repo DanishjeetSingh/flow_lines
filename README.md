@@ -4,6 +4,8 @@
 
 A generative art visualization that creates dynamic particle flow fields using mathematical transformations. Particles move across the canvas, generating intricate, evolving patterns driven by trigonometric calculations.
 
+*NOTE* This is an old project, I'm just making this a stand-alone repo now.
+
 ## Features
 
 - Procedurally generated particle trajectories
