@@ -1,115 +1,120 @@
 # Flow Lines
 
-Up to a million particles drifting through living flow fields, simulated and rendered entirely on the GPU.
+Thousands of particles drifting through flow fields, drawn on the GPU, and playing their own music.
 
-Open `index.html` in a modern browser. There's no build step and no dependencies, just WebGL2.
+**[singhdan.me/flow_lines](https://singhdan.me/flow_lines/)**. Best on a big screen, with sound on.
+
+[![15 seconds of Flow Lines on autopilot (click to play, with sound)](media/demo.jpg)](media/demo.mp4)
+
+*Click the picture for a 15 second clip, sound on.*
+
+I made the first version of this in 2024: a 2D canvas, 5,000 particles and one trig formula. It worked, but it wasn't much to look at. In 2026 I asked Claude (Opus 5.5) to rebuild it however it wanted, and kept pushing on the details until it felt right. This is the result.
+
+## Running it
+
+Open the link above, or run it locally. There's no build step and nothing to install:
 
 ```bash
-python3 -m http.server 8000   # optional, then visit http://localhost:8000
+python3 -m http.server 8000
 ```
 
-## What's in it
+Then visit http://localhost:8000. Any recent browser with WebGL2 works.
 
-**Six flow fields.** Switching fields cross-fades smoothly between them.
+## Things to play with
 
-| # | Field | Idea |
-|---|-------|------|
-| 1 | **Marble** | Angle taken from domain-warped simplex noise, so it folds into glowing ribbons |
-| 2 | **Curl Noise** | The curl of layered 3D simplex noise. It's divergence-free, so particles never clump |
-| 3 | **Whirlpools** | Ten drifting vortices with finite reach over a turbulent sea |
-| 4 | **Magnetic** | Electric field lines between drifting +/− charges, with a slight spiral twist |
-| 5 | **Orbits** | Concentric rings with a travelling radial ripple |
-| 6 | **Origin** | The original 2024 formula, `angle = (cos(x·zoom) + sin(y·zoom)) · curve`, now breathing over time |
+- **Six flow fields**: Marble, Curl Noise, Whirlpools, Magnetic, Orbits and Origin. Origin is the formula from the 2024 version, still in there.
+- **Seven palettes**. Each strand is colored by the direction it's moving.
+- **Drag** to pull the fluid along. Hold still while dragging to spin up a vortex.
+- **Kaleidoscope**: 2 to 8 fold mirrored symmetry.
+- **Ink on paper**: the same thing drawn like ink on warm paper instead of light on black.
+- **Autopilot**: on by default. It changes fields, palettes, the kaleidoscope and the motion on its own random schedule, and stirs the fluid now and then. Anything you touch yourself, it leaves alone for 30 seconds. Good as a screensaver.
+- **Copy link** saves the exact scene you're looking at, seed included, so someone else sees the same thing.
 
-**Seven palettes** (Aurora, Ultraviolet, Ember, Abyss, Synthwave, Koi, Silver). Hue follows each strand's direction of travel. Palettes blend smoothly into each other.
+Every visit starts on a random field and palette.
 
-**Look.** HDR trail accumulation, a dual-Kawase bloom chain, a contrast curve with saturation recovery, a vignette and a fine dither against banding. "Hero" strands burn much brighter than the rest, which adds depth.
+### Keys
 
-**Ink on paper.** The same simulation rendered subtractively, like ink bleeding into warm paper.
-
-**Kaleidoscope.** 2/3/4/6/8-fold mirrored symmetry that rotates slowly.
-
-**Interaction.** Click and drag to pull the fluid along, and hold still to spin up a vortex. Hovering does nothing. Touch works too.
-
-**Autopilot** (on by default). A small director that keeps the piece evolving on its own: every kind of change runs on its own random schedule (new fields and seeds, palettes, kaleidoscope sessions, occasional scatters, and a ghost hand that stirs the fluid), while motion and light settings glide toward new values instead of jumping. Big changes are spaced apart, and anything you touch yourself is left alone for 30 seconds. It never changes paper mode or the particle count. Leave it running as a screensaver.
-
-**Shareable scenes.** Every visit starts on a random field and palette, and the address bar stays clean. *Copy link* (or `L`) copies a link that reproduces the exact scene, seed and every setting included.
-
-**Field vectors.** A live arrow overlay of the field, a nod to the old red debug grid.
-
-**Sound.** Off until you turn it on (the speaker button or `M`, since browsers only start audio after a click). The particles shed "grains" of sound: tiny glassy tones from the bright parts of the image, where height is pitch, left/right is pan, and how much the picture is changing sets how many there are. Soft bells play a quiet phrase every few seconds, a cadence when the field changes and a rising figure on scatter, over a light chord bed and a soft bass. The first palette sets the key and later palettes change the mode over the same root. Dragging opens the pad and draws grains to your hand, and the kaleidoscope adds echoes. The Sound section has Volume, Pad, Shimmer, Notes and Bass. Every note and grain is synthesized live with Web Audio; there are no audio files. The direction was chosen by ear from three offline renders, each measured with [earshot](https://github.com/Leonxlnx/earshot) along the way.
-
-## Controls
-
-| Key | Action |
-|-----|--------|
-| `1`–`6` | Switch field |
-| `←` `→` / `[` `]` | Previous / next palette |
-| `Space` | Pause / resume |
-| `R` | Shuffle the seed |
-| `K` | Cycle kaleidoscope symmetry |
-| `P` | Ink on paper |
+| Key | |
+|-----|---|
+| `1`–`6` | Field |
+| `←` `→` | Palette |
+| `Space` | Pause |
+| `M` | Sound |
 | `A` | Autopilot |
-| `D` | Field vectors |
-| `X` | Scatter all particles |
-| `M` | Sound on / off |
-| `C` | Clear trails |
-| `S` | Save a PNG snapshot |
+| `K` | Kaleidoscope |
+| `P` | Ink on paper |
+| `X` | Scatter the particles |
+| `R` | New seed |
+| `D` | Show the field as arrows |
+| `C` | Clear the trails |
+| `S` | Save a PNG |
 | `L` | Copy a link to this scene |
 | `F` | Fullscreen |
-| `Tab` | Toggle the control panel |
-| `H` | Hide all interface |
+| `Tab` | Settings panel |
+| `H` | Hide everything |
 
-Double-click any slider to reset it. The interface fades away when idle and comes back when you move the mouse.
+Double-click a slider to reset it. The interface fades out when you stop moving the mouse.
+
+## The sound
+
+Sound is off until you click the speaker (browsers don't allow audio before a click). After that, what you hear comes from what's on screen:
+
+- A soft synth pad holds the chords.
+- Small glassy tones come from the bright parts of the image. Height sets the pitch and left/right sets the pan. The more the picture is changing, the more tones there are.
+- Bells play a short phrase every so often, and a few notes when the field changes or you scatter.
+- The palette picks the musical mode, and the kaleidoscope adds echo.
+
+Nothing is prerecorded. It's all synthesized live in the browser with Web Audio.
+
+Claude can't hear, so it used [earshot](https://github.com/Leonxlnx/earshot) to listen to its own renders while designing the sound. It rendered three directions offline, I picked one by ear, and earshot helped track down a harsh organ-like tone I couldn't put a name to.
 
 ## How it works
 
-```
- particle state (RGBA32F: x, y, age, seed)        trail buffer (RGBA16F, HDR)
- ┌──────────────┐  update.frag  ┌──────────────┐  lazy decay ┌────────────┐
- │  ping  tex   │ ────────────▶ │  pong  tex   │ ─────────▶ │  + lines   │──▶ bloom ──▶ composite
- └──────────────┘   RK2 advect  └──────────────┘            └────────────┘    chain      (tonemap,
-                                                                                           grain…)
-```
+Every particle is one pixel in a floating-point texture holding its position, age and seed. Each frame:
 
-1. **Update.** Every particle is a texel in a float texture. A fragment shader samples the flow field twice (midpoint/RK2 integration) and writes the new position into a second texture, plus that frame's segment color into a third (so the line pass doesn't redo the work). Particles respawn when they age out or leave the screen. From 262K particles up, the field is first baked into a fine grid (~384 cells per screen height) once per frame and sampled bilinearly, which is much cheaper than evaluating it two million times.
-2. **Lazy decay.** Fading the whole trail buffer every frame was the most expensive thing on a 4K screen. Instead, each frame's new segments are drawn slightly brighter than the last, and the composite divides by that growing gain. Every few seconds the buffer is scaled by exactly 1/16 (a power of two, so the float math is exact and nothing visibly changes).
-3. **Lines.** Each particle's segment (previous → current position) is an instanced quad with box-filtered, anti-aliased edges, built purely from `gl_VertexID`/`gl_InstanceID` with no vertex buffers. The ends ramp over one pixel so consecutive segments join seamlessly, and color is divided by width so brightness doesn't depend on line width.
-4. **Bloom.** One box-filtered pass straight from full resolution to a pyramid about 540px tall, then dual-filter down/up passes. The pyramid size doesn't depend on screen resolution, so the glow looks and costs the same at 1080p and 4K.
-5. **Composite.** Exposure, filmic tonemap, contrast, saturation, kaleidoscope fold, vignette and grain.
+1. A shader moves every particle along the flow field.
+2. Each particle draws a short anti-aliased line from where it was to where it is, into a trail buffer.
+3. Trails fade slowly, which is what makes the lines.
+4. A glow pass, tone mapping and color grading turn that into the final image.
 
-## Performance
+A few tricks keep it fast at 4K:
 
-Measured on a base Apple M1 at a 4K canvas (3840×2160):
+- **Trails fade without touching every pixel.** Instead of darkening the whole buffer each frame, new lines are drawn a little brighter each frame and the final image divides by that growing number. Every few seconds the buffer is rescaled by a power of two so the numbers stay small.
+- **The glow is computed at about 540p**, whatever your screen size, so it costs the same at 1080p and 4K.
+- **Lines are built in the shader** from instance IDs, with no vertex buffers.
+- **Nothing renders** while paused or when the tab is hidden.
+- **For the sound**, the GPU shrinks the image to a tiny 32×18 grid, and the browser reads that back a few frames later so it never has to wait on the GPU.
 
-| Particles | GPU time per frame |
+### Performance
+
+GPU time per frame on a base M1 Mac, rendering at full 4K (3840×2160):
+
+| Particles | Time per frame |
 |---|---|
 | 16K | ~6 ms |
 | 65K (default) | ~8 ms |
 | 262K | ~14 ms |
 | 1M | ~40 ms |
 
-Your display caps the frames you actually see (60 on a 60Hz screen), so rendering more would only waste power. Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
+A 60 Hz screen allows 16.7 ms per frame, so the default leaves plenty of room. It runs at your screen's full refresh rate, with no cap. If your computer can't keep up, it lowers the particle count on its own.
 
-Shaders compile in the background (`KHR_parallel_shader_compile`), the GPU pipelines are warmed with a few frames before anything is shown, and the canvas then fades in, so startup doesn't stutter.
-
-Brightness is normalised for particle count, resolution, speed and trail length, so the sliders change the character of the image rather than just its brightness. If the frame rate stays low on first load, the app steps down the particle count; existing particles carry over, so the picture never resets.
+On a laptop, if it suddenly feels stuck at 30 fps, check your battery: Chrome's Energy Saver caps pages at 30 fps when the battery is low.
 
 ## Files
 
-- `index.html`: markup for the canvas and interface
-- `style.css`: the inspector-style interface, dark and paper themes, mobile layout
-- `js/shaders.js`: every GLSL program, including the six flow fields
-- `js/engine.js`: the WebGL2 pipeline (textures, framebuffers, passes)
-- `js/audio.js`: the sound: a Web Audio engine that runs live, or offline from a recorded trace of the visuals
-- `js/app.js`: settings, URL state, UI, input, transitions and the frame loop
+| File | |
+|---|---|
+| `index.html` | The page |
+| `style.css` | The interface |
+| `js/shaders.js` | All the GPU code, including the six fields |
+| `js/engine.js` | The WebGL2 rendering pipeline |
+| `js/audio.js` | The sound engine |
+| `js/app.js` | Settings, controls, autopilot and the main loop |
 
-In the console, `flowLines` exposes the engine and helpers, e.g. `flowLines.setField('orbit')` or `flowLines.setCount(1048576)`.
+About 3,600 lines in total, with no libraries.
 
-## Requirements
+The browser console has a `flowLines` object if you want to poke at it, e.g. `flowLines.setField('orbit')` or `flowLines.setCount(1048576)`.
 
-WebGL2 with `EXT_color_buffer_float`, which every current desktop and mobile browser supports.
+## Credits
 
----
-
-*This started in 2024 as a 2D-canvas sketch with 5,000 particles and a single trig formula. That formula still lives on as the **Origin** field.*
+Built with Claude Opus 5.5 by [Anthropic](https://www.anthropic.com). The sound was checked with [earshot](https://github.com/Leonxlnx/earshot).
