@@ -86,7 +86,7 @@ Measured on a base Apple M1 at a 4K canvas (3840×2160):
 | 262K | ~14 ms |
 | 1M | ~40 ms |
 
-Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
+The readout in the corner shows this live: **GPU** is the measured GPU time per frame and the frame rate that would allow. Your display caps the frames you actually see (60 on a 60Hz screen), so rendering more would only waste power. Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
 
 Shaders compile in the background (`KHR_parallel_shader_compile`), the GPU pipelines are warmed with a few frames before anything is shown, and the canvas then fades in, so startup doesn't stutter.
 
