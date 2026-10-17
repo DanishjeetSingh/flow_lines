@@ -27,7 +27,7 @@ Then visit http://localhost:8000. Any recent browser with WebGL2 works.
 - **Drag** to pull the fluid along. Hold still while dragging to spin up a vortex.
 - **Kaleidoscope**: 2 to 8 fold mirrored symmetry.
 - **Ink on paper**: the same thing drawn like ink on warm paper instead of light on black.
-- **Autopilot**: on by default. It changes fields, palettes, the kaleidoscope and the motion on its own random schedule, and stirs the fluid now and then. Anything you touch yourself, it leaves alone for 30 seconds. Good as a screensaver.
+- **Autopilot**: on by default. It changes fields, palettes, the kaleidoscope, the motion and the balance of the sound layers on its own random schedule (never your volume), and stirs the fluid now and then. Anything you touch yourself, it leaves alone for 30 seconds. Good as a screensaver.
 - **Copy link** saves the exact scene you're looking at, seed included, so someone else sees the same thing.
 
 Every visit starts on a random field and palette.

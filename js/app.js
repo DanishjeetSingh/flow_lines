@@ -421,9 +421,12 @@
   const AUTO_RANGES = {
     speed: [0.3, 0.72], scale: [0.2, 0.75], evolve: [0.15, 0.6], trails: [0.62, 0.94],
     bright: [0.42, 0.66], glow: [0.25, 0.7], spread: [0.05, 0.6],
+    mixPad: [0.5, 0.95], mixShimmer: [0.45, 0.95], mixNotes: [0.4, 0.9], mixBass: [0.4, 0.85],
   };
   const MOTION_KEYS = ['speed', 'scale', 'evolve', 'trails'];
   const LIGHT_KEYS = ['bright', 'glow', 'spread'];
+  // The sound layers, never Volume: how loud it is stays yours.
+  const MIX_KEYS = ['mixPad', 'mixShimmer', 'mixNotes', 'mixBass'];
   const KALEIDO_FOLDS = [2, 3, 4, 6, 8];
   const HOLD_MS = 30000;
 
@@ -449,7 +452,7 @@
       this.ghost = null;
       this.next = {
         field: rand(6, 14), seed: rand(15, 35), palette: rand(10, 22), motion: rand(2, 6),
-        light: rand(3, 8), kaleido: rand(18, 40), scatter: rand(20, 45), stir: rand(8, 18),
+        light: rand(3, 8), mix: rand(8, 16), kaleido: rand(18, 40), scatter: rand(20, 45), stir: rand(8, 18),
       };
     },
 
@@ -491,6 +494,11 @@
       light() {
         for (const k of pickSome(LIGHT_KEYS, 1, 2)) auto.glide(k, rand(...AUTO_RANGES[k]), rand(3, 8));
         return rand(5, 14);
+      },
+      // Slow swells between the layers: a long glide, so it rebalances rather than jumps.
+      mix() {
+        for (const k of pickSome(MIX_KEYS, 1, 2)) auto.glide(k, rand(...AUTO_RANGES[k]), rand(6, 14));
+        return rand(10, 24);
       },
       // Kaleidoscope comes in sessions: on for a while, maybe a fold change, then off.
       kaleido() {
