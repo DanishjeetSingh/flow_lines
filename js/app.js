@@ -120,6 +120,11 @@
         } else s[key] = raw;
       }
     } catch (e) { /* ignore a malformed hash */ }
+    // A fresh visit starts somewhere new; a shared link restores its scene.
+    if (!fromHash) {
+      s.field = FIELDS[(Math.random() * FIELDS.length) | 0].id;
+      s.palette = PALETTES[(Math.random() * PALETTES.length) | 0].id;
+    }
     if (!FIELDS.some(f => f.id === s.field)) s.field = DEFAULTS.field;
     if (!PALETTES.some(p => p.id === s.palette)) s.palette = DEFAULTS.palette;
     if (!COUNTS.some(c => c.value === s.count)) s.count = DEFAULTS.count;
@@ -128,21 +133,22 @@
     return { s, fromHash };
   }
 
-  let hashTimer = 0;
-  function saveSettings() {
-    clearTimeout(hashTimer);
-    hashTimer = setTimeout(() => {
-      const q = new URLSearchParams();
-      for (const [key, short] of Object.entries(HASH_KEYS)) {
-        const v = settings[key];
-        q.set(short, typeof v === 'boolean' ? (v ? '1' : '0') : typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(3) : String(v));
-      }
-      try { history.replaceState(null, '', '#' + q.toString()); } catch (e) { /* file:// in some browsers */ }
-    }, 250);
+  // The scene as a link, for Copy link. The address bar itself stays clean.
+  function sceneUrl() {
+    const q = new URLSearchParams();
+    for (const [key, short] of Object.entries(HASH_KEYS)) {
+      const v = settings[key];
+      q.set(short, typeof v === 'boolean' ? (v ? '1' : '0') : typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(3) : String(v));
+    }
+    return location.origin + location.pathname + '#' + q.toString();
   }
 
   const loaded = loadSettings();
   const settings = loaded.s;
+  // A shared link has done its job once loaded: show the plain address.
+  if (location.hash || location.search) {
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* file:// in some browsers */ }
+  }
   let userChoseCount = loaded.fromHash;
 
   // ---------------------------------------------------------------- helpers
@@ -273,7 +279,6 @@
     settings.field = id;
     transitionTo(id, settings.seed);
     syncUI();
-    saveSettings();
     if (!quiet) toast(FIELDS[fieldIndex(id)].name);
   }
 
@@ -281,13 +286,11 @@
     settings.palette = id;
     live.palTarget = paletteArray(id);
     syncUI();
-    saveSettings();
   }
 
   function shuffle() {
     settings.seed = (Math.random() * 1e6) | 0;
     transitionTo(settings.field, settings.seed);
-    saveSettings();
     toast('New seed · ' + settings.seed);
   }
 
@@ -298,7 +301,6 @@
     engine.setParticleCount(n, engine.width / engine.height, LIFE);
     fpsWindow.length = 0;
     syncUI();
-    saveSettings();
   }
 
   function setPaper(on) {
@@ -307,7 +309,6 @@
     engine.clear();
     document.body.classList.toggle('paper', on);
     syncUI();
-    saveSettings();
   }
 
   function setSym(n) {
@@ -318,7 +319,6 @@
     live.symB = n;
     live.symMix = 1e-4;
     syncUI();
-    saveSettings();
   }
 
   function cycle(list, current, dir) {
@@ -398,14 +398,9 @@
   }
 
   function copyLink() {
-    clearTimeout(hashTimer);
-    saveSettings();
-    setTimeout(() => {
-      const url = location.href;
-      (navigator.clipboard?.writeText(url) ?? Promise.reject())
-        .then(() => toast('Link to this scene copied'))
-        .catch(() => toast('Copy failed — the URL holds the scene'));
-    }, 300);
+    (navigator.clipboard?.writeText(sceneUrl()) ?? Promise.reject())
+      .then(() => toast('Link to this scene copied'))
+      .catch(() => toast('Copy failed'));
   }
 
   // ---------------------------------------------------------------- autopilot
@@ -472,7 +467,6 @@
         if (isHeld('field')) return rand(5, 10);
         settings.seed = (Math.random() * 1e6) | 0;
         transitionTo(settings.field, settings.seed);
-        saveSettings();
         return rand(20, 45);
       },
       palette() {
@@ -535,7 +529,6 @@
         syncSlider(key);
         if (u >= 1) {
           delete this.glides[key];
-          saveSettings();
         }
       }
     },
@@ -610,13 +603,11 @@
         hold(sl.key);
         settings[sl.key] = Number(input.value);
         syncSlider(sl.key);
-        saveSettings();
       });
       input.addEventListener('dblclick', () => {
         hold(sl.key);
         settings[sl.key] = DEFAULTS[sl.key];
         syncSlider(sl.key);
-        saveSettings();
       });
       $('#sliders-' + sl.group).appendChild(wrap);
       ui.sliders[sl.key] = { wrap, input, out: wrap.querySelector('output') };
@@ -634,7 +625,7 @@
 
     const toggles = [
       { key: 'paper', label: 'Ink on paper', hint: 'P', on: v => setPaper(v) },
-      { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); saveSettings(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
+      { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
       { key: 'vectors', label: 'Field vectors', hint: 'D', on: v => { settings.vectors = v; } },
       { key: 'sound', label: 'Sound', hint: 'M', parent: '#soundToggles', on: v => setSound(v) },
     ];

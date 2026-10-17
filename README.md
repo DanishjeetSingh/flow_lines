@@ -33,7 +33,7 @@ python3 -m http.server 8000   # optional, then visit http://localhost:8000
 
 **Autopilot** (on by default). A small director that keeps the piece evolving on its own: every kind of change runs on its own random schedule (new fields and seeds, palettes, kaleidoscope sessions, occasional scatters, and a ghost hand that stirs the fluid), while motion and light settings glide toward new values instead of jumping. Big changes are spaced apart, and anything you touch yourself is left alone for 30 seconds. It never changes paper mode or the particle count. Leave it running as a screensaver.
 
-**Shareable scenes.** Every setting, including the seed, lives in the URL hash. Hit *Share* to copy a link that reproduces the exact scene.
+**Shareable scenes.** Every visit starts on a random field and palette, and the address bar stays clean. *Copy link* (or `L`) copies a link that reproduces the exact scene, seed and every setting included.
 
 **Field vectors.** A live arrow overlay of the field, a nod to the old red debug grid.
 
