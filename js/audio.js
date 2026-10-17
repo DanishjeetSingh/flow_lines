@@ -593,7 +593,9 @@
       const curve = v => v * v;
       this.master.gain.setTargetAtTime((s.vol ?? 0.7) ** 2 * 1.6, t, T); // ~-22 LUFS at the default volume
       this.layer.pad.gain.setTargetAtTime(r.pad * curve(s.mixPad ?? 0.8) * (0.6 + 0.55 * this.energy + 0.3 * this.stir), t, 1.2);
-      this.airAmp.gain.setTargetAtTime(0.015 + 0.025 * this.energy, t, 2);
+      // The air bed belongs to the pad: it fades with the Pad slider, so turning
+      // the layers down never leaves bare noise behind.
+      this.airAmp.gain.setTargetAtTime((0.015 + 0.025 * this.energy) * curve(s.mixPad ?? 0.8), t, 2);
       this.layer.bass.gain.setTargetAtTime(r.bass * curve(s.mixBass ?? 0.7), t, T);
       this.layer.shimmer.gain.setTargetAtTime(r.shimmer * curve(s.mixShimmer ?? 0.8), t, T);
       this.layer.notes.gain.setTargetAtTime(r.notes * curve(s.mixNotes ?? 0.75), t, T);

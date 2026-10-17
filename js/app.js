@@ -448,8 +448,8 @@
       this.glides = {};
       this.ghost = null;
       this.next = {
-        field: rand(6, 14), seed: rand(25, 50), palette: rand(10, 22), motion: rand(2, 6),
-        light: rand(3, 8), kaleido: rand(18, 40), scatter: rand(35, 80), stir: rand(8, 18),
+        field: rand(6, 14), seed: rand(15, 35), palette: rand(10, 22), motion: rand(2, 6),
+        light: rand(3, 8), kaleido: rand(18, 40), scatter: rand(20, 45), stir: rand(8, 18),
       };
     },
 
@@ -476,7 +476,8 @@
         if (isHeld('field')) return rand(5, 10);
         settings.seed = (Math.random() * 1e6) | 0;
         transitionTo(settings.field, settings.seed);
-        return rand(20, 45);
+        // A slow-evolving field etches the same paths over and over: refresh it sooner.
+        return settings.evolve < 0.25 ? rand(10, 20) : rand(18, 40);
       },
       palette() {
         if (isHeld('palette') || !auto.big()) return rand(2, 5);
@@ -507,7 +508,7 @@
       },
       scatter() {
         scatter();
-        return rand(40, 95);
+        return rand(28, 65);
       },
       // A ghost hand drags a slow arc through the fluid.
       stir() {
