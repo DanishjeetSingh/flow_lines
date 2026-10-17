@@ -78,7 +78,10 @@ svg {
   display: block;
   touch-action: none;
   cursor: crosshair;
+  transition: opacity 1.4s ease;
 }
+
+body.booting #stage { opacity: 0; }
 
 /* ------------------------------------------------------------------ chrome */
 
@@ -148,8 +151,15 @@ body.idle #stage {
   color: var(--muted);
 }
 
-.icon-btn + .icon-btn { border-left: 1px solid var(--line); }
-.icon-btn:hover { color: var(--fg); background: var(--hover); }
+.text-btn {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--fg);
+}
+
+.dock > * + * { border-left: 1px solid var(--line); }
+.icon-btn:hover,
+.text-btn:hover { color: var(--fg); background: var(--hover); }
 
 body.panel-open #panelToggle,
 body.paused #pauseBtn {

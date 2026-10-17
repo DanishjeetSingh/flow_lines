@@ -63,31 +63,34 @@ Double-click any slider to reset it. The interface fades away when idle and come
 
 ```
  particle state (RGBA32F: x, y, age, seed)        trail buffer (RGBA16F, HDR)
- ┌──────────────┐  update.frag  ┌──────────────┐   ×decay   ┌────────────┐
+ ┌──────────────┐  update.frag  ┌──────────────┐  lazy decay ┌────────────┐
  │  ping  tex   │ ────────────▶ │  pong  tex   │ ─────────▶ │  + lines   │──▶ bloom ──▶ composite
  └──────────────┘   RK2 advect  └──────────────┘            └────────────┘    chain      (tonemap,
                                                                                            grain…)
 ```
 
 1. **Update.** Every particle is a texel in a float texture. A fragment shader samples the flow field twice (midpoint/RK2 integration) and writes the new position into a second texture, plus that frame's segment color into a third (so the line pass doesn't redo the work). Particles respawn when they age out or leave the screen. From 262K particles up, the field is first baked into a fine grid (~384 cells per screen height) once per frame and sampled bilinearly, which is much cheaper than evaluating it two million times.
-2. **Fade.** The trail buffer is multiplied down each frame with a blend trick (`ZERO, SRC_ALPHA`), so trails persist for free.
-3. **Lines.** One `GL_LINES` segment per particle, from previous to current position, generated purely from `gl_VertexID` with no vertex buffers, and drawn additively.
-4. **Bloom.** Six levels of dual-filter downsampling, then additive upsampling.
+2. **Lazy decay.** Fading the whole trail buffer every frame was the most expensive thing on a 4K screen. Instead, each frame's new segments are drawn slightly brighter than the last, and the composite divides by that growing gain. Every few seconds the buffer is scaled by exactly 1/16 (a power of two, so the float math is exact and nothing visibly changes).
+3. **Lines.** Each particle's segment (previous → current position) is an instanced quad with box-filtered, anti-aliased edges, built purely from `gl_VertexID`/`gl_InstanceID` with no vertex buffers. The ends ramp over one pixel so consecutive segments join seamlessly, and color is divided by width so brightness doesn't depend on line width.
+4. **Bloom.** One box-filtered pass straight from full resolution to a pyramid about 540px tall, then dual-filter down/up passes. The pyramid size doesn't depend on screen resolution, so the glow looks and costs the same at 1080p and 4K.
 5. **Composite.** Exposure, filmic tonemap, contrast, saturation, kaleidoscope fold, vignette and grain.
 
 ## Performance
 
-Measured on a base Apple M1 at a 2020×1322 canvas:
+Measured on a base Apple M1 at a 4K canvas (3840×2160):
 
 | Particles | GPU time per frame |
 |---|---|
-| 65K (default) | ~3.6 ms |
-| 262K | ~7 ms |
-| 1M | ~17–18 ms |
+| 16K | ~6 ms |
+| 65K (default) | ~8 ms |
+| 262K | ~14 ms |
+| 1M | ~40 ms |
 
-At the default count, most of the cost is the screen-sized passes (bloom and compositing), so it scales with resolution rather than particle count. At 1M, it's rasterizing a million tiny lines. It runs at your display's full refresh rate, so on a 120Hz screen expect twice the per-second GPU work. Pausing stops GPU work entirely, and hidden tabs don't render at all.
+Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
 
-Brightness is normalised for particle count, resolution, speed and trail length, so the sliders change the character of the image rather than just its brightness. If the frame rate drops on first load, the app quietly steps down the particle count.
+Shaders compile in the background (`KHR_parallel_shader_compile`), the GPU pipelines are warmed with a few frames before anything is shown, and the canvas then fades in, so startup doesn't stutter.
+
+Brightness is normalised for particle count, resolution, speed and trail length, so the sliders change the character of the image rather than just its brightness. If the frame rate stays low on first load, the app steps down the particle count; existing particles carry over, so the picture never resets.
 
 ## Files
 

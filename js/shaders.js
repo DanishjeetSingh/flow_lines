@@ -6,10 +6,12 @@
  *   update    particles live in a float texture (x, y, age, seed); a fragment
  *             shader advects every particle through the flow field (RK2) and
  *             writes the segment color to a second target.
- *   fade      the HDR trail buffer is multiplied down a little (blend trick).
+ *   fade      decay is lazy: new segments are drawn brighter and the composite
+ *             divides; this pass rarely rescales the buffer.
  *   lines     one GL line per particle, previous -> current position, added
  *             into the trail buffer.
- *   bloom     dual-filter (Kawase) down/up chain over the trail buffer.
+ *   bloom     one box-filtered pass down to a ~540p pyramid, then a
+ *             dual-filter (Kawase) down/up chain.
  *   composite tonemap, bloom, kaleidoscope fold, vignette, grain.
  */
 (function () {
@@ -342,6 +344,10 @@ uniform float uDecay;
 out vec4 o;
 void main() { o = vec4(0.0, 0.0, 0.0, uDecay); }`;
 
+  // Each segment is a small quad with box-filtered (anti-aliased) edges. The
+  // ends ramp over one pixel so consecutive segments sum seamlessly, with no
+  // bright beads at the joints. Color is divided by the width so a strand
+  // carries the same energy at any width.
   const LINES_VS = HEADER + `
 uniform sampler2D uPrev;
 uniform sampler2D uCur;
@@ -349,23 +355,82 @@ uniform sampler2D uColor;
 uniform int uSide;
 uniform float uAspect;
 uniform float uIntensity;
+uniform float uWidth;
+uniform vec2 uRes;
 out vec3 vColor;
+out vec2 vLocal;
+out float vLen;
+
+// One instance per particle, drawn as a 4-vertex triangle strip.
+const vec2 CORNERS[4] = vec2[4](vec2(0.0, -1.0), vec2(1.0, -1.0), vec2(0.0, 1.0), vec2(1.0, 1.0));
 
 void main() {
-  int id = gl_VertexID >> 1;
+  int id = gl_InstanceID;
   ivec2 ij = ivec2(id % uSide, id / uSide);
   vec4 c = texelFetch(uColor, ij, 0);
-  vec2 p = (gl_VertexID & 1) == 0 ? texelFetch(uPrev, ij, 0).xy : texelFetch(uCur, ij, 0).xy;
-  vColor = c.rgb * uIntensity;
-  gl_Position = c.a < 0.5
-    ? vec4(2.0, 2.0, 2.0, 1.0)
-    : vec4(p.x / uAspect * 2.0 - 1.0, p.y * 2.0 - 1.0, 0.0, 1.0);
+  vColor = vec3(0.0);
+  vLocal = vec2(0.0);
+  vLen = 0.0;
+  if (c.a < 0.5) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    return;
+  }
+
+  vec2 toPx = uRes / vec2(uAspect, 1.0);
+  vec2 a = texelFetch(uPrev, ij, 0).xy * toPx;
+  vec2 b = texelFetch(uCur, ij, 0).xy * toPx;
+  vec2 d = b - a;
+  float len = length(d);
+  vec2 dir = len > 1e-4 ? d / len : vec2(1.0, 0.0);
+  vec2 n = vec2(-dir.y, dir.x);
+
+  // The coverage falloff reaches zero half a pixel past the segment, so the
+  // quad needs no more margin than that.
+  vec2 corner = CORNERS[gl_VertexID];
+  float along = corner.x < 0.5 ? -0.5 : len + 0.5;
+  float across = corner.y * (uWidth * 0.5 + 0.5);
+  vec2 px = a + dir * along + n * across;
+
+  vLocal = vec2(along, across);
+  vLen = len;
+  vColor = c.rgb * uIntensity / uWidth;
+  gl_Position = vec4(px / uRes * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
   const LINES_FS = HEADER + `
+uniform float uWidth;
 in vec3 vColor;
+in vec2 vLocal;
+in float vLen;
 out vec4 o;
-void main() { o = vec4(vColor, 1.0); }`;
+void main() {
+  float t = vLocal.x;
+  float ca = clamp(t + 0.5, 0.0, 1.0) - clamp(t - vLen + 0.5, 0.0, 1.0);
+  float cs = clamp(uWidth * 0.5 + 0.5 - abs(vLocal.y), 0.0, 1.0);
+  o = vec4(vColor * (ca * cs), 1.0);
+}`;
+
+  // Box-filters a factor x factor block (factor = 2 * uTaps) with uTaps^2
+  // bilinear taps, each of which already averages a 2x2 block.
+  const DOWN_BOX_FS = HEADER + `
+uniform sampler2D uSrc;
+uniform vec2 uTexel;
+uniform int uTaps;
+in vec2 vUv;
+out vec4 o;
+void main() {
+  float n = float(uTaps);
+  vec3 s = vec3(0.0);
+  for (int j = 0; j < 4; j++) {
+    if (j >= uTaps) break;
+    for (int i = 0; i < 4; i++) {
+      if (i >= uTaps) break;
+      vec2 off = vec2(float(2 * i), float(2 * j)) - (n - 1.0);
+      s += texture(uSrc, vUv + off * uTexel).rgb;
+    }
+  }
+  o = vec4(s / (n * n), 1.0);
+}`;
 
   const DOWN_FS = HEADER + `
 uniform sampler2D uSrc;
@@ -403,6 +468,7 @@ void main() {
   const COMPOSITE_FS = HEADER + HASH + `
 uniform sampler2D uAccum;
 uniform sampler2D uBloom;
+uniform vec2 uBloomTexel;
 uniform float uExposure;
 uniform float uBloomStr;
 uniform float uPaper;
@@ -432,14 +498,11 @@ vec2 kaleido(vec2 uv) {
 
 void main() {
   vec2 uv = kaleido(vUv);
-  vec2 dir = (vUv - 0.5);
-  vec2 ca = dir * 0.0035 * dot(dir, dir) * 4.0;
-
-  vec3 acc;
-  acc.r = texture(uAccum, uv + ca).r;
-  acc.g = texture(uAccum, uv).g;
-  acc.b = texture(uAccum, uv - ca).b;
-  vec3 bloom = texture(uBloom, uv).rgb;
+  vec3 acc = texture(uAccum, uv).rgb;
+  // 4-tap tent filter: a smooth upscale of the low-resolution bloom.
+  vec2 bh = uBloomTexel * 0.5;
+  vec3 bloom = 0.25 * (texture(uBloom, uv + vec2(-bh.x, -bh.y)).rgb + texture(uBloom, uv + vec2(bh.x, -bh.y)).rgb
+                     + texture(uBloom, uv + vec2(-bh.x, bh.y)).rgb + texture(uBloom, uv + vec2(bh.x, bh.y)).rgb);
   vec3 hdr = acc * uExposure + bloom * uBloomStr;
   // Contrast curve carves dark channels between strands; then win back the
   // saturation that additive blending of many hues washes out.
@@ -455,8 +518,10 @@ void main() {
   float vig = 1.0 - smoothstep(0.35, 1.25, length(vq));
   col *= mix(1.0 - mix(0.38, 0.14, uPaper), 1.0, vig);
 
-  float n = hash12(gl_FragCoord.xy + fract(uTime * 7.31) * 517.0);
-  col += (n - 0.5) * mix(2.2, 4.0, uPaper) / 255.0;
+  // Triangular dither: just enough to hide banding, not visible as grain.
+  vec2 seed = gl_FragCoord.xy + fract(uTime * 7.31) * 517.0;
+  float n = hash12(seed) + hash12(seed + 71.3) - 1.0;
+  col += n * mix(1.0, 1.5, uPaper) / 255.0;
   o = vec4(col, 1.0);
 }`;
 
@@ -496,6 +561,7 @@ void main() { o = vec4(uArrowCol, 0.32 + 0.4 * vShade); }`;
     fadeFS: FADE_FS,
     linesVS: LINES_VS,
     linesFS: LINES_FS,
+    downBoxFS: DOWN_BOX_FS,
     downFS: DOWN_FS,
     upFS: UP_FS,
     compositeFS: COMPOSITE_FS,

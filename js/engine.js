@@ -8,6 +8,13 @@
 
   const S = window.FL_SHADERS;
 
+  // Stored trail values = displayed x DEPOSIT_SCALE x gain, with gain in
+  // [1, GAIN_LIMIT). Keeps faint strands well clear of half-float's smallest
+  // values while staying far below its maximum (~65000). GAIN_LIMIT must be
+  // a power of two.
+  const DEPOSIT_SCALE = 16;
+  const GAIN_LIMIT = 16;
+
   class FlowError extends Error {
     constructor(code, message) {
       super(message);
@@ -19,21 +26,30 @@
     const sh = gl.createShader(type);
     gl.shaderSource(sh, src);
     gl.compileShader(sh);
-    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-      const log = gl.getShaderInfoLog(sh);
-      const listing = src.split('\n').map((l, i) => `${String(i + 1).padStart(4)}  ${l}`).join('\n');
-      console.error(log + '\n' + listing);
-      throw new FlowError('shader', 'Shader compile failed: ' + log);
-    }
     return sh;
   }
 
-  function createProgram(gl, vsSrc, fsSrc) {
+  // Kick off compilation without asking for the result, so that drivers with
+  // KHR_parallel_shader_compile can build every program in the background.
+  function startProgram(gl, vsSrc, fsSrc) {
     const program = gl.createProgram();
-    gl.attachShader(program, compileShader(gl, gl.VERTEX_SHADER, vsSrc));
-    gl.attachShader(program, compileShader(gl, gl.FRAGMENT_SHADER, fsSrc));
+    const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
     gl.linkProgram(program);
+    return { program, shaders: [[vs, vsSrc], [fs, fsSrc]] };
+  }
+
+  function finishProgram(gl, { program, shaders }) {
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      for (const [sh, src] of shaders) {
+        if (gl.getShaderParameter(sh, gl.COMPILE_STATUS)) continue;
+        const log = gl.getShaderInfoLog(sh);
+        const listing = src.split('\n').map((l, i) => `${String(i + 1).padStart(4)}  ${l}`).join('\n');
+        console.error(log + '\n' + listing);
+        throw new FlowError('shader', 'Shader compile failed: ' + log);
+      }
       throw new FlowError('shader', 'Program link failed: ' + gl.getProgramInfoLog(program));
     }
 
@@ -104,19 +120,22 @@
 
       this.canvas = canvas;
       this.gl = gl;
+
       this.vao = gl.createVertexArray();
       gl.bindVertexArray(this.vao);
 
-      this.progs = {
-        update: createProgram(gl, S.fullscreenVS, S.updateFS),
-        field: createProgram(gl, S.fullscreenVS, S.fieldFS),
-        fade: createProgram(gl, S.fullscreenVS, S.fadeFS),
-        lines: createProgram(gl, S.linesVS, S.linesFS),
-        down: createProgram(gl, S.fullscreenVS, S.downFS),
-        up: createProgram(gl, S.fullscreenVS, S.upFS),
-        composite: createProgram(gl, S.fullscreenVS, S.compositeFS),
-        arrows: createProgram(gl, S.arrowsVS, S.arrowsFS),
+      this.pending = {
+        update: startProgram(gl, S.fullscreenVS, S.updateFS),
+        field: startProgram(gl, S.fullscreenVS, S.fieldFS),
+        fade: startProgram(gl, S.fullscreenVS, S.fadeFS),
+        lines: startProgram(gl, S.linesVS, S.linesFS),
+        downBox: startProgram(gl, S.fullscreenVS, S.downBoxFS),
+        down: startProgram(gl, S.fullscreenVS, S.downFS),
+        up: startProgram(gl, S.fullscreenVS, S.upFS),
+        composite: startProgram(gl, S.fullscreenVS, S.compositeFS),
+        arrows: startProgram(gl, S.arrowsVS, S.arrowsFS),
       };
+      this.progs = null;
 
       this.width = 0;
       this.height = 0;
@@ -129,6 +148,25 @@
       this.accum = null;
       this.bloom = [];
       this.pendingReset = false;
+      // Lazy decay: instead of fading the whole buffer every frame, new
+      // segments are drawn ever brighter (x gain) and the composite divides
+      // by gain. Rarely, the buffer is rescaled once and gain resets to 1.
+      this.gain = 1;
+    }
+
+    // Resolves once every program is linked. Waiting a frame at a time keeps
+    // the page responsive instead of freezing on one big synchronous compile.
+    async ready() {
+      const gl = this.gl;
+      const ext = gl.getExtension('KHR_parallel_shader_compile');
+      if (ext) {
+        const done = () => Object.values(this.pending)
+          .every(p => gl.getProgramParameter(p.program, ext.COMPLETION_STATUS_KHR));
+        while (!done()) await new Promise(r => setTimeout(r, 16));
+      }
+      this.progs = {};
+      for (const [name, p] of Object.entries(this.pending)) this.progs[name] = finishProgram(gl, p);
+      this.pending = null;
     }
 
     get count() {
@@ -139,14 +177,17 @@
       const side = Math.round(Math.sqrt(count));
       if (side === this.side) return;
       const gl = this.gl;
-      this.state.forEach(t => destroyTarget(gl, t));
-      if (this.color) gl.deleteTexture(this.color);
+      const oldState = this.state;
+      const oldColor = this.color;
+      const oldCur = oldState[this.cur];
+      const oldSide = this.side;
 
+      // On a live change, new particles are born (age 0) so they fade in.
       const data = new Float32Array(side * side * 4);
       for (let i = 0; i < side * side; i++) {
         data[i * 4] = Math.random() * aspect;
         data[i * 4 + 1] = Math.random();
-        data[i * 4 + 2] = Math.random() * life;
+        data[i * 4 + 2] = oldCur ? 0 : Math.random() * life;
         data[i * 4 + 3] = Math.random();
       }
       this.state = [0, 1].map(() => createTarget(gl, side, side, gl.RGBA32F, gl.FLOAT, gl.NEAREST, data));
@@ -165,6 +206,23 @@
           throw new FlowError('float', 'Particle render targets incomplete');
         }
       }
+
+      // Carry the existing particles over, so changing the count never resets
+      // the picture: they keep their position, age and seed.
+      if (oldCur) {
+        const k = Math.min(oldSide, side);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, oldCur.fbo);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.state[0].fbo);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.NONE]);
+        gl.blitFramebuffer(0, 0, k, k, 0, 0, k, k, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+      }
+      oldState.forEach(t => destroyTarget(gl, t));
+      if (oldColor) gl.deleteTexture(oldColor);
+
       this.side = side;
       this.cur = 0;
     }
@@ -180,13 +238,18 @@
       destroyTarget(gl, this.accum);
       this.bloom.forEach(t => destroyTarget(gl, t));
       this.accum = createTarget(gl, w, h, gl.RGBA16F, gl.HALF_FLOAT, gl.LINEAR);
+      // The bloom pyramid starts 400-800px tall whatever the screen size, so
+      // the glow looks the same everywhere and costs the same at 4K as at 1080p.
+      let factor = 2;
+      while (h / factor > 800) factor *= 2;
+      this.bloomFactor = Math.min(factor, 8);
       this.bloom = [];
-      let bw = w >> 1;
-      let bh = h >> 1;
-      for (let i = 0; i < 6 && bw >= 8 && bh >= 8; i++) {
+      let bw = Math.max(1, Math.round(w / this.bloomFactor));
+      let bh = Math.max(1, Math.round(h / this.bloomFactor));
+      for (let i = 0; i < 5 && bw >= 8 && bh >= 8; i++) {
         this.bloom.push(createTarget(gl, bw, bh, gl.RGBA16F, gl.HALF_FLOAT, gl.LINEAR));
-        bw >>= 1;
-        bh >>= 1;
+        bw = Math.max(1, bw >> 1);
+        bh = Math.max(1, bh >> 1);
       }
       this.clear();
     }
@@ -205,6 +268,7 @@
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accum.fbo);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
+      this.gain = 1;
     }
 
     scatter() {
@@ -270,17 +334,26 @@
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         this.pendingReset = false;
 
-        // 2. fade trails: dst = dst * decay
+        // 2. lazy decay: older content dims by `decay` relative to new
+        //    segments. Fading the whole 4K buffer every frame was the single
+        //    most expensive thing the old pipeline did. Now, only once the
+        //    gain reaches GAIN_LIMIT is the buffer scaled by exactly
+        //    1/GAIN_LIMIT, a power of two, so the float math is exact and the
+        //    picture doesn't change at all.
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.accum.fbo);
         gl.viewport(0, 0, this.width, this.height);
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.ZERO, gl.SRC_ALPHA);
-        pr = this.progs.fade;
-        gl.useProgram(pr.program);
-        pr.f('uDecay', p.decay);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        this.gain /= p.decay;
+        if (this.gain >= GAIN_LIMIT) {
+          gl.blendFunc(gl.ZERO, gl.SRC_ALPHA);
+          pr = this.progs.fade;
+          gl.useProgram(pr.program);
+          pr.f('uDecay', 1 / GAIN_LIMIT);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          this.gain /= GAIN_LIMIT;
+        }
 
-        // 3. draw this frame's segments additively
+        // 3. draw this frame's segments additively, as anti-aliased quads
         gl.blendFunc(gl.ONE, gl.ONE);
         pr = this.progs.lines;
         gl.useProgram(pr.program);
@@ -289,8 +362,10 @@
         pr.tex('uColor', this.color, 2);
         pr.i('uSide', this.side);
         pr.f('uAspect', p.aspect);
-        pr.f('uIntensity', p.intensity);
-        gl.drawArrays(gl.LINES, 0, this.count * 2);
+        pr.f('uIntensity', p.intensity * DEPOSIT_SCALE * this.gain);
+        pr.f('uWidth', p.lineWidth);
+        pr.v2('uRes', this.width, this.height);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
 
         this.cur = 1 - this.cur;
       }
@@ -299,12 +374,24 @@
       const useBloom = p.bloom > 0.001 && this.bloom.length > 1;
       if (useBloom) {
         gl.disable(gl.BLEND);
+
+        // One box-filtered pass from full resolution straight to the top level.
+        const top = this.bloom[0];
+        pr = this.progs.downBox;
+        gl.useProgram(pr.program);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, top.fbo);
+        gl.viewport(0, 0, top.w, top.h);
+        pr.tex('uSrc', this.accum.tex, 0);
+        pr.v2('uTexel', 1 / this.width, 1 / this.height);
+        pr.i('uTaps', this.bloomFactor >> 1);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
         pr = this.progs.down;
         gl.useProgram(pr.program);
-        let srcTex = this.accum.tex;
-        let sw = this.width;
-        let sh = this.height;
-        for (const lvl of this.bloom) {
+        let srcTex = top.tex;
+        let sw = top.w;
+        let sh = top.h;
+        for (const lvl of this.bloom.slice(1)) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, lvl.fbo);
           gl.viewport(0, 0, lvl.w, lvl.h);
           pr.tex('uSrc', srcTex, 0);
@@ -337,8 +424,12 @@
       gl.useProgram(pr.program);
       pr.tex('uAccum', this.accum.tex, 0);
       pr.tex('uBloom', useBloom ? this.bloom[0].tex : this.accum.tex, 1);
-      pr.f('uExposure', p.exposure);
-      pr.f('uBloomStr', useBloom ? p.bloom : 0);
+      const top = this.bloom[0];
+      pr.v2('uBloomTexel', top ? 1 / top.w : 0, top ? 1 / top.h : 0);
+      // Undo the deposit scale and lazy-decay gain on the way out.
+      const toDisplay = 1 / (DEPOSIT_SCALE * this.gain);
+      pr.f('uExposure', p.exposure * toDisplay);
+      pr.f('uBloomStr', useBloom ? p.bloom * toDisplay : 0);
       pr.f('uPaper', p.paper);
       pr.f('uSym', p.sym);
       pr.f('uSymRot', p.symRot);

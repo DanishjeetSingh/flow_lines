@@ -7,9 +7,9 @@
   <meta name="description" content="A million particles drifting through living flow fields, simulated on the GPU.">
   <meta name="theme-color" content="#000000">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23050508'/%3E%3Cg fill='none' stroke-linecap='round' stroke-width='3.5'%3E%3Cpath d='M10 40c10-14 20 6 30-8s12-10 14-10' stroke='%231fc6b2'/%3E%3Cpath d='M10 28c10-14 20 6 30-8s12-10 14-10' stroke='%239cf2a2' opacity='.7'/%3E%3Cpath d='M10 52c10-14 20 6 30-8s12-10 14-10' stroke='%23f4abff' opacity='.8'/%3E%3C/g%3E%3C/svg%3E">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
-<body>
+<body class="booting">
   <canvas id="stage" aria-label="Animated flow field. Drag to stir it."></canvas>
 
   <header class="brand chrome">
@@ -23,9 +23,7 @@
 
   <div class="dock chrome">
     <button class="icon-btn" id="pauseBtn" type="button" aria-label="Pause"></button>
-    <button class="icon-btn" id="panelToggle" type="button" aria-label="Controls" aria-expanded="false">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-    </button>
+    <button class="text-btn" id="panelToggle" type="button" aria-expanded="false">Settings</button>
   </div>
 
   <aside class="panel chrome" id="panel" aria-label="Controls">
@@ -87,8 +85,8 @@
     <p>Try a recent version of Chrome, Edge, Firefox or Safari with hardware acceleration enabled.</p>
   </div>
 
-  <script src="js/shaders.js"></script>
-  <script src="js/engine.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/shaders.js?v=2"></script>
+  <script src="js/engine.js?v=2"></script>
+  <script src="js/app.js?v=2"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 /*
  * Flow Lines — app: settings, UI, input, transitions and the frame loop.
  */
-(function () {
+(async function () {
   'use strict';
 
   // ---------------------------------------------------------------- catalog
@@ -179,6 +179,7 @@
   let engine;
   try {
     engine = new window.FlowEngine(canvas);
+    await engine.ready();
   } catch (err) {
     console.error(err);
     const fb = $('#fallback');
@@ -200,8 +201,15 @@
   const LIFE = 4.2;
   let dpr = 1;
 
+  // Never render more pixels than a 4K panel has. Scaled display modes
+  // (e.g. "looks like 2560x1440" on a 4K screen) would otherwise render
+  // 5120x2880 only for the OS to throw most of it away.
+  const MAX_PIXELS = 3840 * 2160;
+
   function fitCanvas() {
-    dpr = Math.min(window.devicePixelRatio || 1, settings.count >= 1048576 ? 1.5 : 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const css = window.innerWidth * window.innerHeight;
+    if (css * dpr * dpr > MAX_PIXELS) dpr = Math.sqrt(MAX_PIXELS / css);
     const w = Math.max(2, Math.floor(window.innerWidth * dpr));
     const h = Math.max(2, Math.floor(window.innerHeight * dpr));
     engine.resize(w, h);
@@ -455,9 +463,12 @@
     });
   }
 
+  let idleTimer = 0;
+
   function setPanel(open) {
     document.body.classList.toggle('panel-open', open);
     $('#panelToggle').setAttribute('aria-expanded', String(open));
+    wake();
   }
 
   function syncSlider(key) {
@@ -493,7 +504,7 @@
 
   buildUI();
   document.body.classList.toggle('paper', settings.paper);
-  setPanel(window.innerWidth >= 900);
+  setPanel(window.innerWidth > 720);
   syncUI();
 
   // ---------------------------------------------------------------- input
@@ -555,12 +566,12 @@
   });
 
   // Idle: after a while without input the interface melts away.
-  let idleTimer = 0;
   function wake() {
     document.body.classList.remove('idle');
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (!$('#panel').matches(':hover')) document.body.classList.add('idle');
+      // Only melt away when the settings panel is closed.
+      if (!document.body.classList.contains('panel-open')) document.body.classList.add('idle');
     }, 4500);
   }
   ['pointermove', 'pointerdown', 'keydown', 'wheel'].forEach(t => window.addEventListener(t, wake, { passive: true }));
@@ -611,10 +622,10 @@
       const avg = fpsWindow.reduce((a, b) => a + b, 0) / fpsWindow.length;
       fpsShown = Math.round(1 / avg);
       $('#metaFps').textContent = fpsShown;
-      if (!userChoseCount && !live.paused && adaptiveChecks < 3 && now - startTime > 3000 && fpsWindow.length >= 90 && document.visibilityState === 'visible' && document.hasFocus()) {
+      if (!userChoseCount && !live.paused && adaptiveChecks < 3 && now - startTime > 4000 && fpsWindow.length >= 90 && document.visibilityState === 'visible' && document.hasFocus()) {
         const i = COUNTS.findIndex(c => c.value === settings.count);
-        lowStreak = fpsShown < 38 ? lowStreak + 1 : 0;
-        if (lowStreak >= 4 && i > 0) {
+        lowStreak = fpsShown < 45 ? lowStreak + 1 : 0;
+        if (lowStreak >= 6 && i > 0) {
           lowStreak = 0;
           adaptiveChecks++;
           setCount(COUNTS[i - 1].value, { manual: false });
@@ -678,7 +689,7 @@
     const speed = MAP.speed(settings.speed);
     const decay60 = MAP.trails(settings.trails);
     const count = engine.count;
-    const intensity = 0.62 * Math.pow(1 - decay60, 0.8) * (engine.width / 1000)
+    const intensity = 0.75 * Math.pow(1 - decay60, 0.8) * (engine.width / 1000)
       * Math.pow(262144 / count, 0.8) * Math.pow(MAP.speed(0.5) / speed, 0.45);
 
     Object.assign(params, {
@@ -711,6 +722,8 @@
       // Above ~262K particles, baking the field into a grid is far cheaper
       // than evaluating it twice per particle.
       useGrid: count >= 262144,
+      // Slightly under one CSS pixel: silky on high-DPI screens, never below 1px.
+      lineWidth: Math.max(1, 0.85 * dpr),
     });
     params.mouse[0] = pointer.x;
     params.mouse[1] = pointer.y;
@@ -730,7 +743,12 @@
     }
   }
 
+  // Run a few frames before anything is visible, so GPU pipelines are built
+  // and the first trails exist, then fade the canvas in.
+  for (let i = 0; i < 3; i++) frame(last + 1000 / 60);
+  last = performance.now();
   requestAnimationFrame(loop);
+  requestAnimationFrame(() => document.body.classList.remove('booting'));
 
   // Handy for tinkering from the console.
   window.flowLines = {
