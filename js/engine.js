@@ -459,7 +459,9 @@
       pr.f('uExposure', p.exposure * toDisplay);
       pr.f('uBloomStr', useBloom ? p.bloom * toDisplay : 0);
       pr.f('uPaper', p.paper);
-      pr.f('uSym', p.sym);
+      pr.f('uSymA', p.symA);
+      pr.f('uSymB', p.symB);
+      pr.f('uSymMix', p.symMix);
       pr.f('uSymRot', p.symRot);
       pr.f('uTime', p.clock);
       pr.f('uAspect', p.aspect);

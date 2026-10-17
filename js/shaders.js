@@ -472,7 +472,9 @@ uniform vec2 uBloomTexel;
 uniform float uExposure;
 uniform float uBloomStr;
 uniform float uPaper;
-uniform float uSym;
+uniform float uSymA;
+uniform float uSymB;
+uniform float uSymMix;
 uniform float uSymRot;
 uniform float uTime;
 uniform float uAspect;
@@ -485,25 +487,30 @@ const float TAU = 6.28318530718;
 
 vec2 foldEdges(vec2 uv) { return 1.0 - abs(1.0 - mod(uv, 2.0)); }
 
-vec2 kaleido(vec2 uv) {
-  if (uSym < 1.5) return uv;
+vec2 kaleido(vec2 uv, float sym) {
+  if (sym < 1.5) return uv;
   vec2 p = (uv - 0.5) * vec2(uAspect, 1.0);
   float r = length(p);
-  float seg = TAU / uSym;
+  float seg = TAU / sym;
   float a = mod(atan(p.y, p.x) + uSymRot, seg);
   a = abs(a - seg * 0.5) + 1.5708 - seg * 0.5;
   p = r * vec2(cos(a), sin(a));
   return foldEdges(p / vec2(uAspect, 1.0) + 0.5);
 }
 
-void main() {
-  vec2 uv = kaleido(vUv);
+vec3 sampleHdr(vec2 uv) {
   vec3 acc = texture(uAccum, uv).rgb;
   // 4-tap tent filter: a smooth upscale of the low-resolution bloom.
   vec2 bh = uBloomTexel * 0.5;
   vec3 bloom = 0.25 * (texture(uBloom, uv + vec2(-bh.x, -bh.y)).rgb + texture(uBloom, uv + vec2(bh.x, -bh.y)).rgb
                      + texture(uBloom, uv + vec2(-bh.x, bh.y)).rgb + texture(uBloom, uv + vec2(bh.x, bh.y)).rgb);
-  vec3 hdr = acc * uExposure + bloom * uBloomStr;
+  return acc * uExposure + bloom * uBloomStr;
+}
+
+void main() {
+  // While the kaleidoscope changes, both folds are rendered and cross-faded.
+  vec3 hdr = sampleHdr(kaleido(vUv, uSymA));
+  if (uSymMix > 0.0) hdr = mix(hdr, sampleHdr(kaleido(vUv, uSymB)), uSymMix);
   // Contrast curve carves dark channels between strands; then win back the
   // saturation that additive blending of many hues washes out.
   hdr = pow(hdr, vec3(1.3)) * 1.15;

@@ -230,7 +230,9 @@
     palTarget: paletteArray(settings.palette),
     paper: settings.paper ? 1 : 0,
     vectors: settings.vectors ? 1 : 0,
-    sym: settings.sym,
+    symA: settings.sym,
+    symB: settings.sym,
+    symMix: 0,
     symRot: 0,
     time: Math.random() * 100,
     clock: 0,
@@ -295,7 +297,11 @@
 
   function setSym(n) {
     settings.sym = n;
-    live.sym = n;
+    // Cross-fade from the fold on screen to the new one (see the frame loop).
+    if (live.symMix > 0.5) live.symA = live.symB;
+    if (n === live.symA && live.symMix === 0) return syncUI();
+    live.symB = n;
+    live.symMix = 1e-4;
     syncUI();
     saveSettings();
   }
@@ -804,6 +810,16 @@
       }
     }
 
+    // kaleidoscope cross-fade (keeps redrawing even while paused)
+    if (live.symMix > 0) {
+      live.symMix += rawDt / 1.5;
+      live.dirty = true;
+      if (live.symMix >= 1) {
+        live.symA = live.symB;
+        live.symMix = 0;
+      }
+    }
+
     // palette blend
     const k = 1 - Math.exp(-dt * 2.5);
     for (let i = 0; i < 15; i++) live.pal[i] = lerp(live.pal[i], live.palTarget[i], k);
@@ -830,7 +846,7 @@
     if (!live.paused) {
       live.time += dt * MAP.evolve(settings.evolve);
       live.hueShift += dt * 0.006 * (0.3 + MAP.evolve(settings.evolve));
-      if (live.sym > 1) live.symRot += dt * 0.025;
+      if (live.symA > 1 || live.symB > 1) live.symRot += dt * 0.025;
     }
     live.clock += rawDt;
 
@@ -865,7 +881,9 @@
       palette: live.pal,
       bloom: MAP.glow(settings.glow) * (settings.paper ? 0.35 : 1),
       exposure: MAP.bright(settings.bright) * (settings.paper ? 0.7 : 1),
-      sym: live.sym,
+      symA: live.symA,
+      symB: live.symB,
+      symMix: live.symMix > 0 ? ease(Math.min(1, live.symMix)) : 0,
       symRot: live.symRot,
       vectors: live.vectors,
       // Above ~262K particles, baking the field into a grid is far cheaper
