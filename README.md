@@ -31,7 +31,7 @@ python3 -m http.server 8000   # optional, then visit http://localhost:8000
 
 **Interaction.** Click and drag to pull the fluid along, and hold still to spin up a vortex. Hovering does nothing. Touch works too.
 
-**Autopilot.** A small director that keeps the piece evolving on its own: every kind of change runs on its own random schedule (new fields and seeds, palettes, kaleidoscope sessions, occasional scatters, and a ghost hand that stirs the fluid), while motion and light settings glide toward new values instead of jumping. Big changes are spaced apart, and anything you touch yourself is left alone for 30 seconds. It never changes paper mode or the particle count. Leave it running as a screensaver.
+**Autopilot** (on by default). A small director that keeps the piece evolving on its own: every kind of change runs on its own random schedule (new fields and seeds, palettes, kaleidoscope sessions, occasional scatters, and a ghost hand that stirs the fluid), while motion and light settings glide toward new values instead of jumping. Big changes are spaced apart, and anything you touch yourself is left alone for 30 seconds. It never changes paper mode or the particle count. Leave it running as a screensaver.
 
 **Shareable scenes.** Every setting, including the seed, lives in the URL hash. Hit *Share* to copy a link that reproduces the exact scene.
 
@@ -89,7 +89,7 @@ Measured on a base Apple M1 at a 4K canvas (3840×2160):
 | 262K | ~14 ms |
 | 1M | ~40 ms |
 
-The readout in the corner shows this live: **GPU** is the measured GPU time per frame and the frame rate that would allow. Your display caps the frames you actually see (60 on a 60Hz screen), so rendering more would only waste power. Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
+Your display caps the frames you actually see (60 on a 60Hz screen), so rendering more would only waste power. Up to 262K fits comfortably in 60 fps at 4K. 1M is limited by the number of primitives, not pixels: two million tiny triangles per frame is a lot for any tile-based GPU, so it's for stronger GPUs. The canvas never renders more pixels than a 4K panel has (scaled display modes would otherwise render 5120×2880). It runs at your display's full refresh rate. Pausing stops GPU work entirely, and hidden tabs don't render at all.
 
 Shaders compile in the background (`KHR_parallel_shader_compile`), the GPU pipelines are warmed with a few frames before anything is shown, and the canvas then fades in, so startup doesn't stutter.
 

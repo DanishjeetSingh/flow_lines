@@ -165,21 +165,8 @@
       // segments are drawn ever brighter (x gain) and the composite divides
       // by gain. Rarely, the buffer is rescaled once and gain resets to 1.
       this.gain = 1;
-      this.syncPixel = new Uint8Array(4);
     }
 
-    // Blocks until the GPU has finished everything queued so far. Only used
-    // every couple of seconds, to measure real GPU time per frame. It clears and
-    // reads a 1x1 offscreen target: reading the on-screen canvas instead
-    // would wait for the display (vsync) and always report ~16.7 ms.
-    waitForGpu() {
-      const gl = this.gl;
-      if (!this.probe) this.probe = createTarget(gl, 1, 1, gl.RGBA8, gl.UNSIGNED_BYTE, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.probe.fbo);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.syncPixel);
-    }
 
     // Resolves once every program is linked. Waiting a frame at a time keeps
     // the page responsive instead of freezing on one big synchronous compile.
@@ -301,21 +288,8 @@
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       this.gain = 1;
-      this.syncPixel = new Uint8Array(4);
     }
 
-    // Blocks until the GPU has finished everything queued so far. Only used
-    // every couple of seconds, to measure real GPU time per frame. It clears and
-    // reads a 1x1 offscreen target: reading the on-screen canvas instead
-    // would wait for the display (vsync) and always report ~16.7 ms.
-    waitForGpu() {
-      const gl = this.gl;
-      if (!this.probe) this.probe = createTarget(gl, 1, 1, gl.RGBA8, gl.UNSIGNED_BYTE, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, this.probe.fbo);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.syncPixel);
-    }
 
     scatter() {
       this.pendingReset = true;

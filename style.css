@@ -407,6 +407,10 @@ body:not(.sound-on) .sound-only { display: none; }
 
 .hint.gone { opacity: 0 !important; }
 
+/* The sound hint sits on the bottom line; the stir hint stacks above it while both show. */
+#soundHint { color: var(--fg); }
+#soundHint:not(.gone) + #hint { bottom: calc(var(--gutter) + 18px + env(safe-area-inset-bottom)); }
+
 .toast {
   position: fixed;
   right: var(--gutter);

@@ -84,7 +84,7 @@
     spread: 0.18,
     sym: 0,
     paper: false,
-    auto: false,
+    auto: true,
     vectors: false,
     sound: false, // never restored from a link: browsers only allow audio after a click
     vol: 0.7,
@@ -379,6 +379,7 @@
     audio.setRunning(!live.paused && document.visibilityState === 'visible');
     audio.setEnabled(on);
     document.body.classList.toggle('sound-on', on);
+    if (on) dismissSoundHint();
     syncUI();
     toast(on ? 'Sound on' : 'Sound off');
   }
@@ -671,15 +672,6 @@
 
   let idleTimer = 0;
 
-  // Real GPU time per frame (see the frame loop), shown in the readout.
-  let gpuMs = 0;
-  const gpuSamples = [];
-  let gpuTimer = -2; // skip the first seconds, while pipelines warm up
-  function showGpu() {
-    $('#metaGpu').textContent = live.paused ? 'idle'
-      : gpuMs ? `${gpuMs.toFixed(1)} ms (\u2248${Math.round(1000 / gpuMs)} fps)` : '\u2013';
-  }
-
   function setPanel(open) {
     document.body.classList.toggle('panel-open', open);
     $('#panelToggle').setAttribute('aria-expanded', String(open));
@@ -714,7 +706,6 @@
     $('#metaField').textContent = FIELDS[fieldIndex(settings.field)].name;
     $('#metaCount').textContent = fmtCount(settings.count);
     $('#pauseBtn').innerHTML = icon(live.paused ? 'play' : 'pause');
-    showGpu();
     $('#pauseBtn').setAttribute('aria-label', live.paused ? 'Resume' : 'Pause');
     $('#soundBtn').innerHTML = icon(settings.sound ? 'sound' : 'mute');
     $('#soundBtn').setAttribute('aria-label', settings.sound ? 'Sound off' : 'Sound on');
@@ -803,6 +794,18 @@
     $('#hint').classList.add('gone');
   }
   setTimeout(dismissHint, 9000);
+
+  // Sound can't start on its own (browsers need a click), so invite it once.
+  let soundHintTimer = 0;
+  function dismissSoundHint() {
+    clearTimeout(soundHintTimer);
+    $('#soundHint').classList.add('gone');
+  }
+  if (audio && !settings.sound) {
+    if (matchMedia('(hover: none)').matches) $('#soundHint .sound-hint-how').textContent = 'Tap the speaker.';
+    $('#soundHint').classList.remove('gone');
+    soundHintTimer = setTimeout(dismissSoundHint, 25000);
+  }
 
   // ---------------------------------------------------------------- loop
 
@@ -960,31 +963,7 @@
 
     // While paused the GPU idles: only redraw when something visible changed.
     if (!live.paused || live.dirty || wantSnapshot) {
-      // Every two seconds, time one frame end to end on the GPU: drain the
-      // queue, time an empty round trip, then render and wait. The display
-      // caps what you see (usually 60 fps); this shows what the GPU could
-      // actually sustain.
-      gpuTimer += rawDt;
-      if (gpuTimer > 2 && !live.paused && document.visibilityState === 'visible') {
-        gpuTimer = 0;
-        engine.waitForGpu();
-        const t0 = performance.now();
-        engine.waitForGpu();
-        const t1 = performance.now();
-        engine.render(params);
-        engine.waitForGpu();
-        const t2 = performance.now();
-        // Other work on the GPU (other tabs, apps) can only add time, so the
-        // best of the last few samples is the honest estimate.
-        gpuSamples.push([t2 - t1, t1 - t0]);
-        if (gpuSamples.length > 5) gpuSamples.shift();
-        const frameMs = Math.min(...gpuSamples.map(x => x[0]));
-        const syncMs = Math.min(...gpuSamples.map(x => x[1]));
-        gpuMs = Math.max(0.3, frameMs - syncMs);
-        showGpu();
-      } else {
-        engine.render(params);
-      }
+      engine.render(params);
       live.dirty = false;
     }
 
