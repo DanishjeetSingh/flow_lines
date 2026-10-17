@@ -50,6 +50,11 @@
     { key: 'bright', label: 'Exposure', group: 'look' },
     { key: 'glow', label: 'Glow', group: 'look' },
     { key: 'spread', label: 'Color spread', group: 'look' },
+    { key: 'vol', label: 'Volume', group: 'sound' },
+    { key: 'mixPad', label: 'Pad', group: 'sound' },
+    { key: 'mixShimmer', label: 'Shimmer', group: 'sound' },
+    { key: 'mixNotes', label: 'Notes', group: 'sound' },
+    { key: 'mixBass', label: 'Bass', group: 'sound' },
   ];
 
   // Slider value (0..1) -> engine units.
@@ -81,6 +86,12 @@
     paper: false,
     auto: false,
     vectors: false,
+    sound: false, // never restored from a link: browsers only allow audio after a click
+    vol: 0.7,
+    mixPad: 0.8,
+    mixShimmer: 0.8,
+    mixNotes: 0.75,
+    mixBass: 0.7,
     seed: (Math.random() * 1e6) | 0,
   };
 
@@ -89,6 +100,7 @@
   const HASH_KEYS = {
     field: 'f', palette: 'p', count: 'n', speed: 'sp', scale: 'sc', evolve: 'ev', trails: 'tr',
     bright: 'ex', glow: 'gl', spread: 'cs', sym: 'k', paper: 'ink', auto: 'auto', seed: 's',
+    vol: 'vol', mixPad: 'mp', mixShimmer: 'msh', mixNotes: 'mn', mixBass: 'mb',
   };
 
   function loadSettings() {
@@ -197,6 +209,9 @@
     toast('GPU context lost — reloading');
     setTimeout(() => location.reload(), 900);
   });
+
+  const audio = window.FlowAudio ? new window.FlowAudio() : null;
+  const noteBuf = new Float32Array(32);
 
   const LIFE = 4.2;
   let dpr = 1;
@@ -344,9 +359,38 @@
   function togglePause() {
     live.paused = !live.paused;
     document.body.classList.toggle('paused', live.paused);
+    audio?.setRunning(!live.paused && document.visibilityState === 'visible');
     toast(live.paused ? 'Paused' : 'Flowing');
     syncUI();
   }
+
+  async function setSound(on) {
+    if (!audio) { toast('Sound is not supported in this browser'); return; }
+    if (on) {
+      try {
+        await audio.start(); // must stay inside the click that called us
+      } catch (err) {
+        console.error(err);
+        toast('Could not start sound');
+        return;
+      }
+    }
+    settings.sound = on;
+    audio.setRunning(!live.paused && document.visibilityState === 'visible');
+    audio.setEnabled(on);
+    document.body.classList.toggle('sound-on', on);
+    syncUI();
+    toast(on ? 'Sound on' : 'Sound off');
+  }
+
+  function scatter() {
+    engine.scatter();
+    audio?.onScatter();
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    audio?.setRunning(!live.paused && document.visibilityState === 'visible');
+  });
 
   function toggleUI() {
     document.body.classList.toggle('chrome-hidden');
@@ -458,7 +502,7 @@
         return rand(25, 60);
       },
       scatter() {
-        engine.scatter();
+        scatter();
         return rand(40, 95);
       },
       // A ghost hand drags a slow arc through the fluid.
@@ -518,6 +562,8 @@
   const ICONS = {
     pause: '<path d="M9 6v12M15 6v12"/>',
     play: '<path d="M8 6l10 6-10 6z"/>',
+    sound: '<path d="M4 9.5h3l5-4v13l-5-4H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/>',
+    mute: '<path d="M4 9.5h3l5-4v13l-5-4H4z"/><path d="M16 10l5 4M21 10l-5 4"/>',
   };
   const icon = name => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -589,17 +635,18 @@
       { key: 'paper', label: 'Ink on paper', hint: 'P', on: v => setPaper(v) },
       { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); saveSettings(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
       { key: 'vectors', label: 'Field vectors', hint: 'D', on: v => { settings.vectors = v; } },
+      { key: 'sound', label: 'Sound', hint: 'M', parent: '#soundToggles', on: v => setSound(v) },
     ];
     for (const t of toggles) {
       const b = el('button', { class: 'toggle', type: 'button', role: 'switch', onclick: () => { t.on(!settings[t.key]); syncUI(); } },
         `<span class="check"></span><span class="toggle-label">${t.label}</span><span class="key">${t.hint}</span>`);
-      $('#toggles').appendChild(b);
+      $(t.parent || '#toggles').appendChild(b);
       ui.toggles[t.key] = b;
     }
 
     const actions = [
       { label: 'Shuffle', key: 'R', run: shuffle },
-      { label: 'Scatter', key: 'X', run: () => engine.scatter() },
+      { label: 'Scatter', key: 'X', run: scatter },
       { label: 'Clear', key: 'C', run: clearTrails },
       { label: 'Snapshot', key: 'S', run: snapshot },
       { label: 'Copy link', key: 'L', run: copyLink },
@@ -613,6 +660,7 @@
     $('#panelToggle').addEventListener('click', () => setPanel(!document.body.classList.contains('panel-open')));
     $('#panelClose').addEventListener('click', () => setPanel(false));
     $('#pauseBtn').addEventListener('click', togglePause);
+    $('#soundBtn').addEventListener('click', () => setSound(!settings.sound));
 
     // Buttons should never keep keyboard focus: Space is the pause key.
     document.addEventListener('click', e => {
@@ -668,6 +716,8 @@
     $('#pauseBtn').innerHTML = icon(live.paused ? 'play' : 'pause');
     showGpu();
     $('#pauseBtn').setAttribute('aria-label', live.paused ? 'Resume' : 'Pause');
+    $('#soundBtn').innerHTML = icon(settings.sound ? 'sound' : 'mute');
+    $('#soundBtn').setAttribute('aria-label', settings.sound ? 'Sound off' : 'Sound on');
   }
 
   buildUI();
@@ -724,7 +774,8 @@
       case 'f': toggleFullscreen(); break;
       case 'l': copyLink(); break;
       case 'k': hold('sym'); setSym(cycle(SYMMETRY, settings.sym, 1)); break;
-      case 'x': engine.scatter(); break;
+      case 'x': scatter(); break;
+      case 'm': setSound(!settings.sound); break;
       case 'tab': e.preventDefault(); setPanel(!document.body.classList.contains('panel-open')); break;
       case 'arrowright': case ']': hold('palette'); setPalette(cycle(PALETTES, settings.palette, 1)); toast(paletteOf(settings.palette).name); break;
       case 'arrowleft': case '[': hold('palette'); setPalette(cycle(PALETTES, settings.palette, -1)); toast(paletteOf(settings.palette).name); break;
@@ -788,6 +839,7 @@
       const avg = fpsWindow.reduce((a, b) => a + b, 0) / fpsWindow.length;
       fpsShown = Math.round(1 / avg);
       $('#metaFps').textContent = fpsShown;
+      if (audio && settings.sound) $('#metaKey').textContent = audio.keyName;
       if (!userChoseCount && !live.paused && adaptiveChecks < 3 && now - startTime > 4000 && fpsWindow.length >= 90 && document.visibilityState === 'visible' && document.hasFocus()) {
         const i = COUNTS.findIndex(c => c.value === settings.count);
         lowStreak = fpsShown < 45 ? lowStreak + 1 : 0;
@@ -898,6 +950,14 @@
     params.mouseVel[1] = pointer.vy;
     params.arrowCol = settings.paper ? [0.75, 0.12, 0.16] : [1, 0.38, 0.38];
 
+    // Sound: flares for the notes sounding now, tinted by the palette.
+    const soundOn = !!(settings.sound && audio && !live.paused);
+    params.sound = soundOn;
+    if (soundOn) {
+      params.notes = audio.visualNotes(noteBuf);
+      params.noteTint = settings.paper ? [0.55, 0.55, 0.6] : hexToRgb(paletteOf(settings.palette).stops[4]);
+    }
+
     // While paused the GPU idles: only redraw when something visible changed.
     if (!live.paused || live.dirty || wantSnapshot) {
       // Every two seconds, time one frame end to end on the GPU: drain the
@@ -928,6 +988,37 @@
       live.dirty = false;
     }
 
+    if (soundOn) {
+      const snd = engine.takeSound();
+      audio.update({
+        dt: rawDt,
+        singers: snd && snd.singers,
+        grid: snd && snd.grid,
+        gridScale: snd ? snd.gridScale : 1,
+        gridW: snd ? snd.gridW : 1,
+        gridH: snd ? snd.gridH : 1,
+        aspect,
+        speedUnits: speed,
+        life: LIFE,
+        speed: settings.speed,
+        trails: settings.trails,
+        glow: settings.glow,
+        spread: settings.spread,
+        evolve: settings.evolve,
+        scale: settings.scale,
+        vol: settings.vol,
+        mixPad: settings.mixPad,
+        mixShimmer: settings.mixShimmer,
+        mixNotes: settings.mixNotes,
+        mixBass: settings.mixBass,
+        field: settings.field,
+        palette: settings.palette,
+        sym: settings.sym,
+        paper: settings.paper,
+        pointer: { x: pointer.x, y: pointer.y, vx: pointer.vx, vy: pointer.vy, on: pointer.on, press: pointer.press },
+      });
+    }
+
     if (wantSnapshot) {
       wantSnapshot = false;
       saveCanvas();
@@ -943,7 +1034,7 @@
 
   // Handy for tinkering from the console.
   window.flowLines = {
-    engine, settings, live, setField, setPalette, setCount, shuffle,
+    engine, audio, settings, live, setField, setPalette, setCount, shuffle,
     // Step the simulation n frames synchronously (handy for testing in throttled tabs).
     warm(n = 120) {
       for (let i = 0; i < n; i++) frame(last + 1000 / 60);

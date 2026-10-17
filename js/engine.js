@@ -15,6 +15,17 @@
   const DEPOSIT_SCALE = 16;
   const GAIN_LIMIT = 16;
 
+  // Sound. The first SINGERS particles (texels 0..SINGERS-1 of row 0) get
+  // seeds that make them the brightest "hero" strands; the sound engine
+  // tracks them. The image is also summarised into a GRID_W x GRID_H grid.
+  // Both are read back asynchronously (pixel-pack buffer + fence), so the
+  // CPU never waits on the GPU.
+  const SINGERS = 8;
+  const GRID_W = 32;
+  const GRID_H = 18;
+  const NO_NOTES = new Float32Array(32);
+  const READBACK_AGE = 3; // frames between a readback's fence and reading it
+
   class FlowError extends Error {
     constructor(code, message) {
       super(message);
@@ -69,6 +80,7 @@
       v3: (name, x, y, z) => loc[name] && gl.uniform3f(loc[name], x, y, z),
       v4: (name, a) => loc[name] && gl.uniform4f(loc[name], a[0], a[1], a[2], a[3]),
       v3v: (name, arr) => loc[name] && gl.uniform3fv(loc[name], arr),
+      v4v: (name, arr) => loc[name] && gl.uniform4fv(loc[name], arr),
       tex: (name, tex, unit) => {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -133,6 +145,7 @@
         down: startProgram(gl, S.fullscreenVS, S.downFS),
         up: startProgram(gl, S.fullscreenVS, S.upFS),
         composite: startProgram(gl, S.fullscreenVS, S.compositeFS),
+        soundGrid: startProgram(gl, S.fullscreenVS, S.soundGridFS),
         arrows: startProgram(gl, S.arrowsVS, S.arrowsFS),
       };
       this.progs = null;
@@ -203,6 +216,11 @@
         data[i * 4 + 1] = Math.random();
         data[i * 4 + 2] = oldCur ? 0 : Math.random() * life;
         data[i * 4 + 3] = Math.random();
+      }
+      // Singers: seed = (k + f) / 91.71 puts fract(seed * 91.71) = f near 1,
+      // the top of the shader's "hero" brightness curve.
+      for (let i = 0; i < SINGERS; i++) {
+        data[i * 4 + 3] = (Math.floor(Math.random() * 90) + 0.965 + Math.random() * 0.03) / 91.71;
       }
       this.state = [0, 1].map(() => createTarget(gl, side, side, gl.RGBA32F, gl.FLOAT, gl.NEAREST, data));
 
@@ -303,6 +321,143 @@
       this.pendingReset = true;
     }
 
+    setFoldUniforms(pr, p) {
+      pr.f('uSymA', p.symA);
+      pr.f('uSymB', p.symB);
+      pr.f('uSymMix', p.symMix);
+      pr.f('uSymRot', p.symRot);
+      pr.f('uAspect', p.aspect);
+    }
+
+    // ------------------------------------------------------------------ sound
+
+    initSound() {
+      const gl = this.gl;
+      const pbo = bytes => {
+        const b = gl.createBuffer();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, b);
+        gl.bufferData(gl.PIXEL_PACK_BUFFER, bytes, gl.STREAM_READ);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        return b;
+      };
+      this.snd = {
+        grid: createTarget(gl, GRID_W, GRID_H, gl.RGBA16F, gl.HALF_FLOAT, gl.NEAREST),
+        gridPbo: pbo(GRID_W * GRID_H * 16),
+        singerPbo: pbo(SINGERS * 16),
+        gridData: new Float32Array(GRID_W * GRID_H * 4),
+        singers: new Float32Array(SINGERS * 4),
+        gridSync: null,
+        singerSync: null,
+        gridScale: 1,
+        pendingScale: 1,
+        gridFresh: false,
+        singersFresh: false,
+        frame: 0,
+        singerAt: 0,
+        gridAt: -1e9,
+        singerSeen: -1,
+        gridSeen: -1,
+      };
+    }
+
+    // Collect any finished readbacks without blocking.
+    pollSound() {
+      const gl = this.gl;
+      const snd = this.snd;
+      // A readback is collected in three steps, a frame apart at least:
+      //   1. its fence is a few frames old (READBACK_AGE),
+      //   2. the fence is seen as signalled (clientWaitSync, zero timeout:
+      //      never blocks),
+      //   3. on a LATER frame, the data is read.
+      // Chrome copies the buffer for us in the background once the fence
+      // signals; reading on the same frame we first see the signal can beat
+      // that copy, which forces a slow synchronous path and a console warning.
+      const ready = (sync, issued, seen) => {
+        if (!sync || snd.frame - issued < READBACK_AGE) return 'wait';
+        if (seen >= 0) return snd.frame > seen ? 'read' : 'wait';
+        const r = gl.clientWaitSync(sync, 0, 0);
+        return r === gl.ALREADY_SIGNALED || r === gl.CONDITION_SATISFIED ? 'seen' : 'wait';
+      };
+      const singer = ready(snd.singerSync, snd.singerAt, snd.singerSeen);
+      if (singer === 'seen') snd.singerSeen = snd.frame;
+      if (singer === 'read') {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.singerPbo);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, snd.singers);
+        gl.deleteSync(snd.singerSync);
+        snd.singerSync = null;
+        snd.singerSeen = -1;
+        snd.singersFresh = true;
+      }
+      const grid = ready(snd.gridSync, snd.gridAt, snd.gridSeen);
+      if (grid === 'seen') snd.gridSeen = snd.frame;
+      if (grid === 'read') {
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.gridPbo);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, snd.gridData);
+        gl.deleteSync(snd.gridSync);
+        snd.gridSync = null;
+        snd.gridSeen = -1;
+        snd.gridScale = snd.pendingScale;
+        snd.gridFresh = true;
+      }
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    }
+
+    captureSound(p) {
+      const gl = this.gl;
+      if (!this.snd) this.initSound();
+      const snd = this.snd;
+      snd.frame++;
+      this.pollSound();
+
+      // Singer positions from the newest particle state (~20 per second).
+      if (!snd.singerSync) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.state[this.cur].fbo);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.singerPbo);
+        gl.readPixels(0, 0, SINGERS, 1, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        snd.singerSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        snd.singerAt = snd.frame;
+      }
+
+      // The folded image, summarised into a small grid (~10 per second).
+      if (!snd.gridSync && snd.frame - snd.gridAt >= 2 * READBACK_AGE) {
+        const src = this.bloom.find(l => l.h <= GRID_H * 4) || this.bloom[this.bloom.length - 1];
+        const pr = this.progs.soundGrid;
+        gl.disable(gl.BLEND);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, snd.grid.fbo);
+        gl.viewport(0, 0, GRID_W, GRID_H);
+        gl.useProgram(pr.program);
+        this.setFoldUniforms(pr, p);
+        pr.tex('uSrc', src.tex, 0);
+        pr.v2('uGridRes', GRID_W, GRID_H);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.gridPbo);
+        gl.readPixels(0, 0, GRID_W, GRID_H, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        snd.gridSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        snd.gridAt = snd.frame;
+        // Grid values are in stored trail units; this brings them to display units.
+        snd.pendingScale = p.exposure / (DEPOSIT_SCALE * this.gain);
+      }
+    }
+
+    // Hand over whatever arrived since the last call.
+    takeSound() {
+      const snd = this.snd;
+      if (!snd) return null;
+      this.pollSound();
+      const out = {
+        singers: snd.singersFresh ? snd.singers : null,
+        grid: snd.gridFresh ? snd.gridData : null,
+        gridScale: snd.gridScale,
+        gridW: GRID_W,
+        gridH: GRID_H,
+      };
+      snd.singersFresh = false;
+      snd.gridFresh = false;
+      return out;
+    }
+
     setFlowUniforms(pr, p) {
       pr.f('uTime', p.time);
       pr.f('uAspect', p.aspect);
@@ -399,7 +554,8 @@
       }
 
       // 4. bloom: downsample chain, then additive upsample back to level 0
-      const useBloom = p.bloom > 0.001 && this.bloom.length > 1;
+      // Sound reads the bloom pyramid, so it's built even with Glow at zero.
+      const useBloom = (p.bloom > 0.001 || p.sound) && this.bloom.length > 1;
       if (useBloom) {
         gl.disable(gl.BLEND);
 
@@ -444,6 +600,8 @@
         }
       }
 
+      if (p.sound) this.captureSound(p);
+
       // 5. composite to the screen
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, this.width, this.height);
@@ -459,14 +617,12 @@
       pr.f('uExposure', p.exposure * toDisplay);
       pr.f('uBloomStr', useBloom ? p.bloom * toDisplay : 0);
       pr.f('uPaper', p.paper);
-      pr.f('uSymA', p.symA);
-      pr.f('uSymB', p.symB);
-      pr.f('uSymMix', p.symMix);
-      pr.f('uSymRot', p.symRot);
+      this.setFoldUniforms(pr, p);
       pr.f('uTime', p.clock);
-      pr.f('uAspect', p.aspect);
       pr.v3('uBg', p.bg[0], p.bg[1], p.bg[2]);
       pr.v3('uPaperCol', p.paperCol[0], p.paperCol[1], p.paperCol[2]);
+      pr.v4v('uNotes', p.sound && p.notes ? p.notes : NO_NOTES);
+      if (p.noteTint) pr.v3('uNoteTint', p.noteTint[0], p.noteTint[1], p.noteTint[2]);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       // 6. optional flow-field vectors, an homage to the old debug grid

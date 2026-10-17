@@ -383,6 +383,9 @@ body.paper .slider:hover .fill { filter: brightness(0.95); }
 
 .action:hover { color: var(--fg); background: var(--hover); }
 
+#sliders-sound { margin-top: 6px; }
+body:not(.sound-on) .sound-only { display: none; }
+
 .keys {
   padding: 10px;
   border-top: 1px solid var(--line);

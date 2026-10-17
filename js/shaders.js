@@ -465,23 +465,14 @@ void main() {
   o = vec4(s / 12.0, 1.0);
 }`;
 
-  const COMPOSITE_FS = HEADER + HASH + `
-uniform sampler2D uAccum;
-uniform sampler2D uBloom;
-uniform vec2 uBloomTexel;
-uniform float uExposure;
-uniform float uBloomStr;
-uniform float uPaper;
+  // Kaleidoscope fold, shared by the composite and the sound scan, so what
+  // you hear is exactly what you see.
+  const KALEIDO = `
 uniform float uSymA;
 uniform float uSymB;
 uniform float uSymMix;
 uniform float uSymRot;
-uniform float uTime;
 uniform float uAspect;
-uniform vec3 uBg;
-uniform vec3 uPaperCol;
-in vec2 vUv;
-out vec4 o;
 
 const float TAU = 6.28318530718;
 
@@ -497,6 +488,25 @@ vec2 kaleido(vec2 uv, float sym) {
   p = r * vec2(cos(a), sin(a));
   return foldEdges(p / vec2(uAspect, 1.0) + 0.5);
 }
+`;
+
+  const COMPOSITE_FS = HEADER + HASH + KALEIDO + `
+uniform sampler2D uAccum;
+uniform sampler2D uBloom;
+uniform vec2 uBloomTexel;
+uniform float uExposure;
+uniform float uBloomStr;
+uniform float uPaper;
+uniform float uTime;
+uniform vec3 uBg;
+uniform vec3 uPaperCol;
+// Sound: up to 8 recent notes as (u, v, intensity, radius). A positive radius
+// means the note sits on a strand (source space, so kaleidoscope copies flare
+// too); a negative one means a fixed spot on screen.
+uniform vec4 uNotes[8];
+uniform vec3 uNoteTint;
+in vec2 vUv;
+out vec4 o;
 
 vec3 sampleHdr(vec2 uv) {
   vec3 acc = texture(uAccum, uv).rgb;
@@ -509,8 +519,22 @@ vec3 sampleHdr(vec2 uv) {
 
 void main() {
   // While the kaleidoscope changes, both folds are rendered and cross-faded.
-  vec3 hdr = sampleHdr(kaleido(vUv, uSymA));
-  if (uSymMix > 0.0) hdr = mix(hdr, sampleHdr(kaleido(vUv, uSymB)), uSymMix);
+  vec2 uvA = kaleido(vUv, uSymA);
+  vec2 uvB = uvA;
+  vec3 hdr = sampleHdr(uvA);
+  if (uSymMix > 0.0) {
+    uvB = kaleido(vUv, uSymB);
+    hdr = mix(hdr, sampleHdr(uvB), uSymMix);
+  }
+
+  // Sound: a brief flare wherever a note is struck.
+  vec2 src = uSymMix > 0.5 ? uvB : uvA;
+  for (int i = 0; i < 8; i++) {
+    vec4 nt = uNotes[i];
+    if (nt.z <= 0.0) continue;
+    vec2 d = ((nt.w > 0.0 ? src : vUv) - nt.xy) * vec2(uAspect, 1.0);
+    hdr += uNoteTint * nt.z * exp(-dot(d, d) / (nt.w * nt.w));
+  }
   // Contrast curve carves dark channels between strands; then win back the
   // saturation that additive blending of many hues washes out.
   hdr = pow(hdr, vec3(1.3)) * 1.15;
@@ -530,6 +554,23 @@ void main() {
   float n = hash12(seed) + hash12(seed + 71.3) - 1.0;
   col += n * mix(1.0, 1.5, uPaper) / 255.0;
   o = vec4(col, 1.0);
+}`;
+
+  // Sound scan: averages the folded image into a small grid, read back
+  // asynchronously so chimes can ring where new structure appears.
+  const SOUND_GRID_FS = HEADER + KALEIDO + `
+uniform sampler2D uSrc;
+uniform vec2 uGridRes;
+in vec2 vUv;
+out vec4 o;
+void main() {
+  float sym = uSymMix > 0.5 ? uSymB : uSymA;
+  vec2 q = 0.25 / uGridRes;
+  vec3 s = texture(uSrc, kaleido(vUv + vec2(-q.x, -q.y), sym)).rgb
+         + texture(uSrc, kaleido(vUv + vec2(q.x, -q.y), sym)).rgb
+         + texture(uSrc, kaleido(vUv + vec2(-q.x, q.y), sym)).rgb
+         + texture(uSrc, kaleido(vUv + vec2(q.x, q.y), sym)).rgb;
+  o = vec4(s * 0.25, 1.0);
 }`;
 
   const ARROWS_VS = HEADER + NOISE + COMMON + FLOW + `
@@ -572,6 +613,7 @@ void main() { o = vec4(uArrowCol, 0.32 + 0.4 * vShade); }`;
     downFS: DOWN_FS,
     upFS: UP_FS,
     compositeFS: COMPOSITE_FS,
+    soundGridFS: SOUND_GRID_FS,
     arrowsVS: ARROWS_VS,
     arrowsFS: ARROWS_FS,
   };

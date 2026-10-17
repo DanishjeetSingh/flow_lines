@@ -23,7 +23,7 @@ python3 -m http.server 8000   # optional, then visit http://localhost:8000
 
 **Seven palettes** (Aurora, Ultraviolet, Ember, Abyss, Synthwave, Koi, Silver). Hue follows each strand's direction of travel. Palettes blend smoothly into each other.
 
-**Look.** HDR trail accumulation, a dual-Kawase bloom chain, a contrast curve with saturation recovery, subtle chromatic aberration, vignette and dithered film grain. "Hero" strands burn much brighter than the rest, which adds depth.
+**Look.** HDR trail accumulation, a dual-Kawase bloom chain, a contrast curve with saturation recovery, a vignette and a fine dither against banding. "Hero" strands burn much brighter than the rest, which adds depth.
 
 **Ink on paper.** The same simulation rendered subtractively, like ink bleeding into warm paper.
 
@@ -36,6 +36,8 @@ python3 -m http.server 8000   # optional, then visit http://localhost:8000
 **Shareable scenes.** Every setting, including the seed, lives in the URL hash. Hit *Share* to copy a link that reproduces the exact scene.
 
 **Field vectors.** A live arrow overlay of the field, a nod to the old red debug grid.
+
+**Sound.** Off until you turn it on (the speaker button or `M`, since browsers only start audio after a click). The particles shed "grains" of sound: tiny glassy tones from the bright parts of the image, where height is pitch, left/right is pan, and how much the picture is changing sets how many there are. Soft bells play a quiet phrase every few seconds, a cadence when the field changes and a rising figure on scatter, over a light chord bed and a soft bass. The first palette sets the key and later palettes change the mode over the same root. Dragging opens the pad and draws grains to your hand, and the kaleidoscope adds echoes. The Sound section has Volume, Pad, Shimmer, Notes and Bass. Every note and grain is synthesized live with Web Audio; there are no audio files. The direction was chosen by ear from three offline renders, each measured with [earshot](https://github.com/Leonxlnx/earshot) along the way.
 
 ## Controls
 
@@ -50,6 +52,7 @@ python3 -m http.server 8000   # optional, then visit http://localhost:8000
 | `A` | Autopilot |
 | `D` | Field vectors |
 | `X` | Scatter all particles |
+| `M` | Sound on / off |
 | `C` | Clear trails |
 | `S` | Save a PNG snapshot |
 | `L` | Copy a link to this scene |
@@ -98,6 +101,7 @@ Brightness is normalised for particle count, resolution, speed and trail length,
 - `style.css`: the inspector-style interface, dark and paper themes, mobile layout
 - `js/shaders.js`: every GLSL program, including the six flow fields
 - `js/engine.js`: the WebGL2 pipeline (textures, framebuffers, passes)
+- `js/audio.js`: the sound: a Web Audio engine that runs live, or offline from a recorded trace of the visuals
 - `js/app.js`: settings, URL state, UI, input, transitions and the frame loop
 
 In the console, `flowLines` exposes the engine and helpers, e.g. `flowLines.setField('orbit')` or `flowLines.setCount(1048576)`.
