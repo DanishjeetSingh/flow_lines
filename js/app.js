@@ -357,6 +357,156 @@
     }, 300);
   }
 
+  // ---------------------------------------------------------------- autopilot
+
+  // A small director. Every kind of change runs on its own random schedule,
+  // motion and light settings glide toward new targets instead of jumping,
+  // big changes are spaced apart, and anything you touch yourself is left
+  // alone for a while.
+  const AUTO_RANGES = {
+    speed: [0.3, 0.72], scale: [0.2, 0.75], evolve: [0.15, 0.6], trails: [0.62, 0.94],
+    bright: [0.42, 0.66], glow: [0.25, 0.7], spread: [0.05, 0.6],
+  };
+  const MOTION_KEYS = ['speed', 'scale', 'evolve', 'trails'];
+  const LIGHT_KEYS = ['bright', 'glow', 'spread'];
+  const KALEIDO_FOLDS = [2, 3, 4, 6, 8];
+  const HOLD_MS = 30000;
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[(Math.random() * arr.length) | 0];
+  const pickSome = (arr, min, max) => arr.slice().sort(() => Math.random() - 0.5).slice(0, Math.round(rand(min, max)));
+
+  const heldUntil = {};
+  function hold(key) { heldUntil[key] = performance.now() + HOLD_MS; }
+  const isHeld = key => (heldUntil[key] || 0) > performance.now();
+
+  const auto = {
+    t: 0,
+    lastBig: -1e9,
+    next: {},
+    glides: {},
+    ghost: null,
+
+    reset() {
+      this.t = 0;
+      this.lastBig = -1e9;
+      this.glides = {};
+      this.ghost = null;
+      this.next = {
+        field: rand(6, 14), seed: rand(25, 50), palette: rand(10, 22), motion: rand(2, 6),
+        light: rand(3, 8), kaleido: rand(18, 40), scatter: rand(35, 80), stir: rand(8, 18),
+      };
+    },
+
+    glide(key, to, dur) {
+      if (isHeld(key)) return;
+      this.glides[key] = { from: settings[key], to, start: this.t, dur };
+    },
+
+    // Field, palette and kaleidoscope changes are "big": keep them apart.
+    big() {
+      if (this.t - this.lastBig < 4) return false;
+      this.lastBig = this.t;
+      return true;
+    },
+
+    events: {
+      field() {
+        if (isHeld('field') || !auto.big()) return rand(2, 5);
+        settings.seed = (Math.random() * 1e6) | 0;
+        setField(pick(FIELDS.filter(f => f.id !== settings.field)).id, { quiet: true });
+        return rand(9, 26);
+      },
+      seed() {
+        if (isHeld('field')) return rand(5, 10);
+        settings.seed = (Math.random() * 1e6) | 0;
+        transitionTo(settings.field, settings.seed);
+        saveSettings();
+        return rand(20, 45);
+      },
+      palette() {
+        if (isHeld('palette') || !auto.big()) return rand(2, 5);
+        setPalette(pick(PALETTES.filter(p => p.id !== settings.palette)).id);
+        return rand(12, 32);
+      },
+      motion() {
+        for (const k of pickSome(MOTION_KEYS, 1, 3)) auto.glide(k, rand(...AUTO_RANGES[k]), rand(4, 11));
+        return rand(6, 16);
+      },
+      light() {
+        for (const k of pickSome(LIGHT_KEYS, 1, 2)) auto.glide(k, rand(...AUTO_RANGES[k]), rand(3, 8));
+        return rand(5, 14);
+      },
+      // Kaleidoscope comes in sessions: on for a while, maybe a fold change, then off.
+      kaleido() {
+        if (isHeld('sym') || !auto.big()) return rand(2, 5);
+        if (settings.sym === 0) {
+          setSym(pick(KALEIDO_FOLDS));
+          return rand(10, 24);
+        }
+        if (Math.random() < 0.4) {
+          setSym(pick(KALEIDO_FOLDS.filter(n => n !== settings.sym)));
+          return rand(8, 18);
+        }
+        setSym(0);
+        return rand(25, 60);
+      },
+      scatter() {
+        engine.scatter();
+        return rand(40, 95);
+      },
+      // A ghost hand drags a slow arc through the fluid.
+      stir() {
+        if (pointer.down) return rand(5, 10);
+        const aspect = engine.width / engine.height;
+        auto.ghost = {
+          start: auto.t,
+          dur: rand(1.6, 3.4),
+          cx: rand(0.25, 0.75) * aspect,
+          cy: rand(0.25, 0.75),
+          r: rand(0.08, 0.2),
+          a0: rand(0, Math.PI * 2),
+          sweep: rand(2.5, 6) * (Math.random() < 0.5 ? -1 : 1),
+        };
+        return rand(10, 30);
+      },
+    },
+
+    update(dt) {
+      this.t += dt;
+      for (const [name, fn] of Object.entries(this.events)) {
+        if (this.t >= this.next[name]) this.next[name] = this.t + fn();
+      }
+      for (const [key, g] of Object.entries(this.glides)) {
+        if (isHeld(key)) { delete this.glides[key]; continue; }
+        const u = Math.min(1, (this.t - g.start) / g.dur);
+        settings[key] = lerp(g.from, g.to, ease(u));
+        syncSlider(key);
+        if (u >= 1) {
+          delete this.glides[key];
+          saveSettings();
+        }
+      }
+    },
+
+    // Position and velocity of the ghost hand, or null when it isn't stirring.
+    ghostPointer() {
+      const g = this.ghost;
+      if (!g) return null;
+      const u = (this.t - g.start) / g.dur;
+      if (u >= 1 || pointer.down) { this.ghost = null; return null; }
+      const a = g.a0 + g.sweep * ease(u);
+      const da = g.sweep * 6 * u * (1 - u) / g.dur; // d(angle)/dt of the eased sweep
+      return {
+        x: g.cx + Math.cos(a) * g.r,
+        y: g.cy + Math.sin(a) * g.r,
+        vx: -Math.sin(a) * g.r * da,
+        vy: Math.cos(a) * g.r * da,
+      };
+    },
+  };
+  auto.reset();
+
   // ---------------------------------------------------------------- UI build
 
   const ICONS = {
@@ -381,7 +531,7 @@
   function buildUI() {
     const fieldsEl = $('#fields');
     FIELDS.forEach((f, i) => {
-      const b = el('button', { class: 'chip', type: 'button', title: f.blurb, onclick: () => setField(f.id) },
+      const b = el('button', { class: 'chip', type: 'button', title: f.blurb, onclick: () => { hold('field'); setField(f.id); } },
         `<span class="chip-key">${i + 1}</span><span class="chip-name">${f.name}</span>`);
       fieldsEl.appendChild(b);
       ui.fields.push(b);
@@ -392,7 +542,7 @@
       const b = el('button', {
         class: 'swatch', type: 'button', title: p.name, 'aria-label': p.name + ' palette',
         style: `--g: linear-gradient(90deg, ${p.stops.map((c, i) => `${c} ${i * 20}% ${(i + 1) * 20}%`).join(', ')})`,
-        onclick: () => setPalette(p.id),
+        onclick: () => { hold('palette'); setPalette(p.id); },
       });
       palEl.appendChild(b);
       ui.palettes.push(b);
@@ -404,11 +554,13 @@
          <input type="range" min="0" max="1" step="0.001" aria-label="${sl.label}">`);
       const input = wrap.querySelector('input');
       input.addEventListener('input', () => {
+        hold(sl.key);
         settings[sl.key] = Number(input.value);
         syncSlider(sl.key);
         saveSettings();
       });
       input.addEventListener('dblclick', () => {
+        hold(sl.key);
         settings[sl.key] = DEFAULTS[sl.key];
         syncSlider(sl.key);
         saveSettings();
@@ -425,11 +577,11 @@
       });
     };
     segment($('#counts'), COUNTS, ui.counts, n => n !== settings.count && setCount(n));
-    segment($('#syms'), SYMMETRY, ui.syms, setSym);
+    segment($('#syms'), SYMMETRY, ui.syms, n => { hold('sym'); setSym(n); });
 
     const toggles = [
       { key: 'paper', label: 'Ink on paper', hint: 'P', on: v => setPaper(v) },
-      { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; autoClock = 0; saveSettings(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
+      { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); saveSettings(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
       { key: 'vectors', label: 'Field vectors', hint: 'D', on: v => { settings.vectors = v; } },
     ];
     for (const t of toggles) {
@@ -553,23 +705,23 @@
     if (e.target.matches?.('input[type="text"], textarea')) return;
     const k = e.key.toLowerCase();
     const n = Number(e.key);
-    if (n >= 1 && n <= FIELDS.length) { setField(FIELDS[n - 1].id); return; }
+    if (n >= 1 && n <= FIELDS.length) { hold('field'); setField(FIELDS[n - 1].id); return; }
     switch (k) {
       case ' ': e.preventDefault(); togglePause(); break;
       case 'h': toggleUI(); break;
       case 'd': settings.vectors = !settings.vectors; syncUI(); break;
       case 'p': setPaper(!settings.paper); break;
       case 'a': ui.toggles.auto.click(); break;
-      case 'r': shuffle(); break;
+      case 'r': hold('field'); shuffle(); break;
       case 's': snapshot(); break;
       case 'c': clearTrails(); break;
       case 'f': toggleFullscreen(); break;
       case 'l': copyLink(); break;
-      case 'k': setSym(cycle(SYMMETRY, settings.sym, 1)); break;
+      case 'k': hold('sym'); setSym(cycle(SYMMETRY, settings.sym, 1)); break;
       case 'x': engine.scatter(); break;
       case 'tab': e.preventDefault(); setPanel(!document.body.classList.contains('panel-open')); break;
-      case 'arrowright': case ']': setPalette(cycle(PALETTES, settings.palette, 1)); toast(paletteOf(settings.palette).name); break;
-      case 'arrowleft': case '[': setPalette(cycle(PALETTES, settings.palette, -1)); toast(paletteOf(settings.palette).name); break;
+      case 'arrowright': case ']': hold('palette'); setPalette(cycle(PALETTES, settings.palette, 1)); toast(paletteOf(settings.palette).name); break;
+      case 'arrowleft': case '[': hold('palette'); setPalette(cycle(PALETTES, settings.palette, -1)); toast(paletteOf(settings.palette).name); break;
       default: return;
     }
     dismissHint();
@@ -600,8 +752,6 @@
   const fpsWindow = [];
   let fpsShown = 60;
   let fpsTimer = 0;
-  let autoClock = 0;
-  let autoPaletteClock = 0;
   let adaptiveChecks = 0;
   let lowStreak = 0;
   let last = performance.now();
@@ -660,33 +810,22 @@
     live.vectors = live.paused ? (settings.vectors ? 1 : 0) : lerp(live.vectors, settings.vectors ? 1 : 0, 1 - Math.exp(-dt * 8));
 
     // autopilot
-    if (settings.auto && !live.paused) {
-      autoClock += dt;
-      autoPaletteClock += dt;
-      if (autoClock > 13) {
-        autoClock = 0;
-        const others = FIELDS.filter(f => f.id !== settings.field);
-        settings.seed = (Math.random() * 1e6) | 0;
-        setField(others[(Math.random() * others.length) | 0].id);
-      }
-      if (autoPaletteClock > 27) {
-        autoPaletteClock = 0;
-        setPalette(cycle(PALETTES, settings.palette, 1));
-      }
-    }
+    if (settings.auto && !live.paused) auto.update(dt);
 
-    // pointer easing
+    // pointer easing (the autopilot's ghost hand drives it when you aren't)
+    const ghost = settings.auto && !live.paused ? auto.ghostPointer() : null;
+    if (ghost) Object.assign(pointer, { x: ghost.x, y: ghost.y, rawVx: ghost.vx, rawVy: ghost.vy, lastMove: now });
     const idleMs = now - pointer.lastMove;
-    if (idleMs > 60 || !pointer.down) { pointer.rawVx = 0; pointer.rawVy = 0; }
+    if (idleMs > 60 || !(pointer.down || ghost)) { pointer.rawVx = 0; pointer.rawVy = 0; }
     const pk = 1 - Math.exp(-dt * 14);
     pointer.vx = lerp(pointer.vx, pointer.rawVx, pk);
     pointer.vy = lerp(pointer.vy, pointer.rawVy, pk);
     const vmag = Math.hypot(pointer.vx, pointer.vy);
     if (vmag > 3) { pointer.vx *= 3 / vmag; pointer.vy *= 3 / vmag; }
     // Only an active left-drag touches the fluid; hovering never does.
-    const active = pointer.down;
+    const active = pointer.down || !!ghost;
     pointer.on = lerp(pointer.on, active ? 1 : 0, 1 - Math.exp(-dt * (active ? 10 : 2)));
-    pointer.press = lerp(pointer.press, pointer.down ? 1 : 0, 1 - Math.exp(-dt * 6));
+    pointer.press = lerp(pointer.press, active ? 1 : 0, 1 - Math.exp(-dt * 6));
 
     if (!live.paused) {
       live.time += dt * MAP.evolve(settings.evolve);
