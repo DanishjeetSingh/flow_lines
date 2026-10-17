@@ -700,8 +700,28 @@
       return this.sound && this.sound.out;
     }
 
+    // iPhones mute Web Audio when the ring switch is on silent, unlike video
+    // and music. Declaring the page a media player lifts that: the Audio
+    // Session API where it exists (iOS 17+), otherwise a silent looping
+    // <audio> element, which switches the page into playback mode.
+    playThroughSilentSwitch() {
+      if (navigator.audioSession) {
+        try { navigator.audioSession.type = 'playback'; } catch (e) { /* read-only in some builds */ }
+        return;
+      }
+      if (!/iPad|iPhone|iPod/.test(navigator.userAgent) && !(navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent))) return;
+      if (!this.keepAlive) {
+        const silence = new AudioBuffer({ length: 4000, sampleRate: 8000, numberOfChannels: 1 });
+        this.keepAlive = new Audio(URL.createObjectURL(new Blob([FlowSound.toWav(silence)], { type: 'audio/wav' })));
+        this.keepAlive.loop = true;
+        this.keepAlive.setAttribute('playsinline', '');
+      }
+      this.keepAlive.play().catch(() => {});
+    }
+
     // Must be called from a user gesture (browsers block audio otherwise).
     async start() {
+      this.playThroughSilentSwitch(); // before any await: it needs the gesture
       if (this.ctx) {
         await this.ctx.resume();
         return;
@@ -735,9 +755,11 @@
       g.setValueAtTime(g.value, now);
       if (live) {
         this.ctx.resume();
+        this.keepAlive?.play().catch(() => {});
         g.setTargetAtTime(1, now, 0.4);
       } else {
         g.setTargetAtTime(0, now, 0.15);
+        this.keepAlive?.pause();
         this.suspendTimer = setTimeout(() => this.ctx.suspend(), 900);
       }
     }
