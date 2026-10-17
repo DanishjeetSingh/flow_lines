@@ -237,7 +237,16 @@
   }
   fitCanvas();
   engine.setParticleCount(settings.count, engine.width / engine.height, LIFE);
-  window.addEventListener('resize', () => { fitCanvas(); live.dirty = true; });
+  // When the shape changes (a phone rotating), spread the particles over the
+  // new shape right away instead of leaving an empty strip until they respawn.
+  let fitAspect = engine.width / engine.height;
+  window.addEventListener('resize', () => {
+    fitCanvas();
+    live.dirty = true;
+    const aspect = engine.width / engine.height;
+    if (Math.abs(aspect / fitAspect - 1) > 0.1) engine.scatter();
+    fitAspect = aspect;
+  });
 
   // ---------------------------------------------------------------- live state
 
@@ -778,6 +787,12 @@
   ['pointermove', 'pointerdown', 'keydown', 'wheel'].forEach(t => window.addEventListener(t, wake, { passive: true }));
   wake();
 
+  // Touch screens get touch words.
+  if (matchMedia('(hover: none)').matches) {
+    $('#hint').textContent = 'Drag to stir. Hold still to spin a vortex.';
+    $('#soundHint .sound-hint-how').textContent = 'Tap the speaker.';
+  }
+
   let hintGone = false;
   function dismissHint() {
     if (hintGone) return;
@@ -793,7 +808,6 @@
     $('#soundHint').classList.add('gone');
   }
   if (audio && !settings.sound) {
-    if (matchMedia('(hover: none)').matches) $('#soundHint .sound-hint-how').textContent = 'Tap the speaker.';
     $('#soundHint').classList.remove('gone');
     soundHintTimer = setTimeout(dismissSoundHint, 25000);
   }

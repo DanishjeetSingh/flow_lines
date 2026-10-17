@@ -397,19 +397,25 @@ body:not(.sound-on) .sound-only { display: none; }
 
 /* -------------------------------------------------------------- hint/toast */
 
-.hint {
+/* The hints stack on the bottom left: the sound hint on the last line. */
+.hints {
   position: fixed;
   left: var(--gutter);
+  right: var(--gutter);
   bottom: calc(var(--gutter) + env(safe-area-inset-bottom));
-  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   pointer-events: none;
+}
+
+.hint {
+  color: var(--muted);
 }
 
 .hint.gone { opacity: 0 !important; }
 
-/* The sound hint sits on the bottom line; the stir hint stacks above it while both show. */
 #soundHint { color: var(--fg); }
-#soundHint:not(.gone) + #hint { bottom: calc(var(--gutter) + 18px + env(safe-area-inset-bottom)); }
 
 .toast {
   position: fixed;
@@ -457,5 +463,8 @@ body.failed .chrome { display: none; }
   }
 
   .keys { display: none; }
-  body.panel-open .hint { display: none; }
+  body.panel-open .hints { display: none; }
+
+  /* Small screens: keep the readout to the name and the field. */
+  .meta > :nth-child(n+3):nth-child(-n+6) { display: none; }
 }
