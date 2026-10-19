@@ -29,7 +29,7 @@
     { id: 'abyss', name: 'Abyss', stops: ['#020c2b', '#0b3d91', '#1f8fff', '#6fd3ff', '#e6fbff'] },
     { id: 'synth', name: 'Synthwave', stops: ['#250b5e', '#7a1fd6', '#ff2e88', '#ff9e3d', '#ffe8a3'] },
     { id: 'koi', name: 'Koi', stops: ['#0b1d2a', '#ef476f', '#ffd166', '#06d6a0', '#f4faff'] },
-    { id: 'silver', name: 'Silver', stops: ['#262932', '#5f6577', '#a2a8b8', '#d9dde7', '#ffffff'] },
+    { id: 'rose', name: 'Rose', stops: ['#2a0614', '#8a1c4a', '#e0507a', '#ffa48c', '#fff0e3'] },
   ];
 
   // Mirrors fold the screen, space warps bend it, then the kaleidoscope

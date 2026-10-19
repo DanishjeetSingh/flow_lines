@@ -52,7 +52,7 @@
     abyss:       { root: 2,  mode: 'Aeolian',    steps: [0, 2, 3, 5, 7, 8, 10], bright: 0.6 },
     synth:       { root: 9,  mode: 'Mixolydian', steps: [0, 2, 4, 5, 7, 9, 10], bright: 1.05 },
     koi:         { root: 7,  mode: 'Ionian',     steps: [0, 2, 4, 5, 7, 9, 11], bright: 0.95 },
-    silver:      { root: 10, mode: 'Lydian',     steps: [0, 2, 4, 6, 7, 9, 11], bright: 1.1 },
+    rose:        { root: 5,  mode: 'Ionian',     steps: [0, 2, 4, 5, 7, 9, 11], bright: 0.9 },
   };
 
   // Which layers play, and how loud. "glass" is the live sound (chosen by ear
