@@ -267,9 +267,10 @@
       const t = i / 4;
       let h = h0 + sweep * t * t * (3 - 2 * t);
       const L = L0 + (rnd() - 0.5) * 0.04;
-      // Dark yellows read as olive mud: push them toward amber or green.
+      // Yellows and yellow-greens below pale read as olive or khaki mud:
+      // move them out of that band, toward amber or toward green.
       const hh = ((h % 360) + 360) % 360;
-      if (L < 0.5 && hh > 78 && hh < 128) h += hh < 103 ? -35 : 30;
+      if (L < 0.75 && hh > 75 && hh < 135) h += hh < 105 ? 60 - hh : 150 - hh;
       return { L, C: peak * Cs[i], h };
     });
     const mid = ((stops[2].h % 360) + 360) % 360;
