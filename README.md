@@ -71,7 +71,7 @@ Sound is off until you click the speaker (browsers don't allow audio before a cl
 - The wind: gusts playing strings tuned to the chord, like an aeolian harp. Where the strands flow hard, pressure builds on the strings at that height and releases as soft swells, panned to where the flow is. Calm scenes stay quiet; fast, sweeping ones swell often.
 - The palette picks the musical mode, and the kaleidoscope adds echo.
 - Every chime, bell and swell comes from where its strand is on screen and drifts the way the flow there moves, so a current sweeping across sounds like it's passing by. Sounds from faint, sparse areas sit further back, softer and with more hall. With the kaleidoscope or a mirror on, they come from mirrored sides too.
-- **Headphones (3D sound)** in the Sound section places the bells and wind swells around you in 3D: left and right, higher for the top of the screen, lower for the bottom. It's made for AirPods and other headphones; on speakers, leave it off.
+- **Headphones (3D sound)** in the Sound section puts you inside it: every chime, bell and swell is placed around you in 3D (left and right reach a little behind you, the top of the screen is above you, the bottom below), the hall surrounds you from behind and the pad spreads wide in front. It's made for AirPods and other headphones; on speakers, leave it off. Under the hood it's a sphere of 14 virtual speakers, each a head-related (HRTF) filter, that every voice is panned between.
 
 Nothing is prerecorded. It's all synthesized live in the browser with Web Audio.
 

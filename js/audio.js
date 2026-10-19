@@ -19,8 +19,10 @@
  *
  * Space: every chime, bell and swell sits where its strand is on screen and
  * moves the way the flow there moves; sounds from faint, sparse areas sit
- * further back (quieter, more hall). With Headphones on, bells and swells are
- * placed in 3D around the listener (HRTF): height follows the screen too.
+ * further back (quieter, more hall). With Headphones on, every one of them is
+ * placed in 3D around the listener (a sphere of HRTF virtual speakers; height
+ * follows the screen too), the hall comes from all around and behind, and the
+ * pad spreads wide in front.
  *
  * The first palette sets the key; later palettes change the mode over the
  * same root. Field changes land on a chord change, dragging opens the pad and
@@ -141,8 +143,13 @@
       // how aligned it is, its sideways drift, and per-height bands.
       this.wind = { amount: 0, speed: 0, coherence: 0, drift: 0, bands: new Float32Array(STRINGS), bandX: new Float32Array(STRINGS).fill(0.5), bandVX: new Float32Array(STRINGS) };
       this.flowX = null; // per grid cell: which way (and how fast) the strands there move sideways, -1..1
-      this.spatial = opts.spatial || 'stereo';
+      this.spatial = 'stereo';
+      this.speakers = null;
+      // The HRTF filters add gain (the near ear hears a side source louder);
+      // this keeps 3D as loud as stereo, so the toggle never jumps.
+      this.spaceTrim = opts.spaceTrim ?? 0.6;
       this.build();
+      if (opts.spatial === 'hrtf') this.setSpatial('hrtf', 0);
     }
 
     get keyName() {
@@ -171,14 +178,17 @@
 
       // One hall, fed by every layer at its own amount.
       this.verbIn = gain(1);
-      this.verbIn.connect(new ConvolverNode(ctx, { buffer: hallImpulse(ctx, 7, this.rnd) })).connect(this.mix);
+      this.verbOut = new ConvolverNode(ctx, { buffer: hallImpulse(ctx, 7, this.rnd) });
+      this.verbDirect = gain(1); // stereo hall straight into the mix (turned down in 3D)
+      this.verbIn.connect(this.verbOut).connect(this.verbDirect).connect(this.mix);
       const bus = (dry, wet) => {
         const input = gain(1);
         const d = gain(dry);
         const w = gain(wet);
-        input.connect(d).connect(this.mix);
+        const direct = gain(1); // turned down for the pad in 3D, where it spreads wide instead
+        input.connect(d).connect(direct).connect(this.mix);
         input.connect(w).connect(this.verbIn);
-        return { input, dry: d, wet: w };
+        return { input, dry: d, wet: w, direct };
       };
       this.bus = {
         pad: bus(0.55, 0.7),
@@ -271,6 +281,8 @@
       this.echoFb = gain(0.36);
       const echoLP = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 2600 });
       tone.connect(this.echoSend).connect(this.echoL);
+      this.echoIn = gain(1); // 3D notes skip the dry path but keep the echo
+      this.echoIn.connect(this.echoSend);
       this.echoL.connect(new StereoPannerNode(ctx, { pan: -0.7 })).connect(this.layer.notes);
       this.echoL.connect(this.echoR);
       this.echoR.connect(new StereoPannerNode(ctx, { pan: 0.7 })).connect(this.layer.notes);
@@ -279,38 +291,128 @@
 
     // Where a voice sits. x is -1..1 (left to right) and glides from x0 to x1
     // over dur, y is 0..1 (bottom to top of the screen), near is 0..1 (far to
-    // close). Stereo: an equal-power pan that moves. Headphones: an HRTF
-    // panner around the listener (only for the longer voices: there are few
-    // of them, and each costs a small convolution).
-    place(at, dur, x0, x1, y, near, dest, layer, hrtf) {
+    // close). Stereo: an equal-power pan that moves. Headphones: the voice is
+    // panned between the nearest virtual speakers of the 3D sphere (see
+    // buildSpace), so it can sit beside, above, below or behind the listener.
+    place(at, dur, x0, x1, y, near, dest, layer) {
       const ctx = this.ctx;
       const far = 1 - clamp01(near);
       const input = new GainNode(ctx, { gain: 1 - 0.35 * far });
-      input.connect(new GainNode(ctx, { gain: 0.9 * far })).connect(this.farSend[layer]);
       x0 = Math.max(-1, Math.min(1, x0));
       x1 = Math.max(-1, Math.min(1, x1));
-      if (hrtf && this.spatial === 'hrtf') {
-        const pn = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0 });
-        const el = (clamp01(y) - 0.5) * 0.8;  // about +-23 degrees
-        const r = 1 + far;
-        const pos = x => {
-          const az = x * 1.4;                   // about +-80 degrees
-          return [r * Math.sin(az) * Math.cos(el), r * Math.sin(el), -r * Math.cos(az) * Math.cos(el)];
-        };
-        const a = pos(x0);
-        const b = pos(x1);
-        [pn.positionX, pn.positionY, pn.positionZ].forEach((param, k) => {
-          param.setValueAtTime(a[k], at);
-          param.linearRampToValueAtTime(b[k], at + dur);
-        });
-        input.connect(pn).connect(dest);
-      } else {
-        const sp = new StereoPannerNode(ctx, { pan: x0 * 0.85 });
-        sp.pan.setValueAtTime(x0 * 0.85, at);
-        sp.pan.linearRampToValueAtTime(x1 * 0.85, at + dur);
-        input.connect(sp).connect(dest);
+      if (this.spatial === 'hrtf' && this.speakers) {
+        // dry: through this layer's speaker feeds; wet: the hall, as in stereo
+        const bus = this.bus[layer];
+        input.connect(new GainNode(ctx, { gain: bus.wet.gain.value + 0.9 * far })).connect(this.farSend[layer]);
+        if (layer === 'notes') input.connect(this.echoIn);
+        const el = (clamp01(y) - 0.5) * 80;      // top of the screen 40 degrees up, bottom 40 down
+        const w0 = this.speakerWeights(x0 * 100, el);
+        const w1 = this.speakerWeights(x1 * 100, el);
+        const feeds = this.spaceFeeds[layer];
+        for (const k of new Set([...w0.keys(), ...w1.keys()])) {
+          const g = new GainNode(ctx, { gain: 0 });
+          g.gain.setValueAtTime(w0.get(k) || 0, at);
+          g.gain.linearRampToValueAtTime(w1.get(k) || 0, at + dur);
+          input.connect(g).connect(feeds[k]);
+        }
+        return input;
       }
+      input.connect(new GainNode(ctx, { gain: 0.9 * far })).connect(this.farSend[layer]);
+      const sp = new StereoPannerNode(ctx, { pan: x0 * 0.85 });
+      sp.pan.setValueAtTime(x0 * 0.85, at);
+      sp.pan.linearRampToValueAtTime(x1 * 0.85, at + dur);
+      input.connect(sp).connect(dest);
       return input;
+    }
+
+    // ------------------------------------------------------------- 3D
+
+    // A sphere of virtual speakers for headphones: a ring of eight at ear
+    // height (two of them behind), three above and three below, each an HRTF
+    // panner at a fixed direction. Voices are amplitude-panned between the
+    // nearest ones, so any number of voices costs the same 14 filters. Built
+    // on first use.
+    buildSpace() {
+      const ctx = this.ctx;
+      const gain = v => new GainNode(ctx, { gain: v });
+      const deg = Math.PI / 180;
+      const dirs = [];
+      for (const az of [-150, -105, -60, -20, 20, 60, 105, 150]) dirs.push([az, 0]);
+      for (const az of [-60, 0, 60]) dirs.push([az, 50]);
+      for (const az of [-60, 0, 60]) dirs.push([az, -40]);
+      this.spaceOut = gain(0);
+      this.spaceOut.connect(this.mix);
+      this.speakers = dirs.map(([az, el]) => {
+        const input = gain(1);
+        const pn = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0 });
+        pn.positionX.value = Math.sin(az * deg) * Math.cos(el * deg);
+        pn.positionY.value = Math.sin(el * deg);
+        pn.positionZ.value = -Math.cos(az * deg) * Math.cos(el * deg);
+        input.connect(pn).connect(this.spaceOut);
+        return { az, el, input };
+      });
+      // Per layer, one feed into each speaker that follows the layer's level
+      // and dry amount, so the mix sliders still rule 3D voices.
+      this.spaceFeeds = {};
+      for (const name of ['shimmer', 'notes', 'wind']) {
+        this.spaceFeeds[name] = this.speakers.map(sp => {
+          const g = gain(0);
+          g.connect(sp.input);
+          return g;
+        });
+      }
+      // The hall from all around and behind, the pad wide in front.
+      const byDir = (az, el) => this.speakers.findIndex(sp => sp.az === az && sp.el === el);
+      const verbSplit = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+      this.verbRear = gain(0);
+      this.verbOut.connect(this.verbRear).connect(verbSplit);
+      [[0, -150], [0, -105], [0, -60], [1, 150], [1, 105], [1, 60]].forEach(([ch, az]) => {
+        verbSplit.connect(gain(Math.abs(az) > 100 ? 0.4 : 0.25), ch).connect(this.speakers[byDir(az, 0)].input);
+      });
+      const padSplit = new ChannelSplitterNode(ctx, { numberOfOutputs: 2 });
+      this.padWide = gain(0);
+      this.bus.pad.dry.connect(this.padWide).connect(padSplit);
+      [[0, -60], [0, -20], [1, 60], [1, 20]].forEach(([ch, az]) => {
+        padSplit.connect(gain(Math.abs(az) > 40 ? 0.5 : 0.3), ch).connect(this.speakers[byDir(az, 0)].input);
+      });
+    }
+
+    // Equal-power weights over the speakers nearest a direction (degrees).
+    speakerWeights(az, el) {
+      const out = new Map();
+      const pairOn = (idx, a, wrap, scale) => {
+        const azs = idx.map(i => this.speakers[i].az);
+        let j = azs.findIndex((v, k) => k < azs.length - 1 && a >= v && a <= azs[k + 1]);
+        let lo, hi, f;
+        if (j >= 0) { lo = idx[j]; hi = idx[j + 1]; f = (a - azs[j]) / (azs[j + 1] - azs[j]); }
+        else if (wrap) { // between the last and the first, through the back
+          lo = idx[idx.length - 1]; hi = idx[0];
+          const span = 360 - (azs[azs.length - 1] - azs[0]);
+          f = ((a - azs[azs.length - 1] + 360) % 360) / span;
+        } else { // past the ends of a front row: the nearest end
+          lo = hi = a < azs[0] ? idx[0] : idx[idx.length - 1]; f = 0;
+        }
+        out.set(lo, (out.get(lo) || 0) + Math.cos(f * Math.PI / 2) * scale);
+        if (hi !== lo) out.set(hi, (out.get(hi) || 0) + Math.sin(f * Math.PI / 2) * scale);
+      };
+      const ring = [0, 1, 2, 3, 4, 5, 6, 7];
+      const up = el >= 0;
+      const u = clamp01(Math.abs(el) / (up ? 50 : 40));
+      pairOn(ring, az, true, Math.cos(u * Math.PI / 2));
+      if (u > 0.01) pairOn(up ? [8, 9, 10] : [11, 12, 13], az, false, Math.sin(u * Math.PI / 2));
+      return out;
+    }
+
+    setSpatial(mode, t = this.ctx.currentTime) {
+      this.spatial = mode;
+      const on = mode === 'hrtf';
+      if (on && !this.speakers) this.buildSpace();
+      if (!this.speakers) return;
+      this.spaceOut.gain.setTargetAtTime(on ? this.spaceTrim : 0, t, 0.3);
+      this.verbRear.gain.setTargetAtTime(on ? 1 : 0, t, 0.3);
+      this.verbDirect.gain.setTargetAtTime(on ? 0.35 : 1, t, 0.3);
+      this.padWide.gain.setTargetAtTime(on ? 1 : 0, t, 0.3);
+      this.bus.pad.direct.gain.setTargetAtTime(on ? 0.3 : 1, t, 0.3);
     }
 
     // Sideways flow at a point of the screen (u, v in 0..1), -1..1.
@@ -376,7 +478,7 @@
       tone.frequency.setValueAtTime(freq * 2, at);
       tone.frequency.linearRampToValueAtTime(freq * (2.6 + 1.6 * speed), at + attack);
       tone.frequency.setTargetAtTime(freq * 2, at + attack, release / 3);
-      tone.connect(amp).connect(this.place(at, attack + release, x0, x1, y, near, this.windIn, 'wind', true));
+      tone.connect(amp).connect(this.place(at, attack + release, x0, x1, y, near, this.windIn, 'wind'));
       const beat = 0.3 + this.rnd() * 0.4;
       for (const [off, lvl, type] of [[0, 1, 'triangle'], [beat, 0.7, 'triangle'], [-beat * 0.5, 0.35, 'sine']]) {
         const osc = new OscillatorNode(ctx, { type, frequency: freq + off });
@@ -392,6 +494,7 @@
       const wind = (this.recipe.wind || 0) * (s.mixWind ?? 0.75) ** 2;
       this.layer.wind.gain.setTargetAtTime(wind, t, 0.4);
       this.farSend.wind.gain.setTargetAtTime(wind, t, 0.4);
+      if (this.speakers) for (const g of this.spaceFeeds.wind) g.gain.setTargetAtTime(wind * this.bus.wind.dry.gain.value, t, 0.4);
     }
 
     // ------------------------------------------------------------- music
@@ -662,7 +765,7 @@
       mod.connect(idx).connect(osc.frequency);
       const env = new GainNode(ctx, { gain: 0 });
       const lvl = new GainNode(ctx, { gain: level });
-      osc.connect(env).connect(lvl).connect(this.place(at, dur, x0, x1, y, near, this.shimmerIn, 'shimmer', false));
+      osc.connect(env).connect(lvl).connect(this.place(at, dur, x0, x1, y, near, this.shimmerIn, 'shimmer'));
       env.gain.setValueCurveAtTime(STRIKE, at, dur);
       osc.start(at);
       mod.start(at);
@@ -691,7 +794,7 @@
       amp.gain.linearRampToValueAtTime(vel * 0.2, at + (bell ? 0.01 : 0.025));
       amp.gain.setTargetAtTime(0, at + 0.01, decay / 3);
       const end = at + decay * 2.2;
-      car.connect(amp).connect(this.place(at, end - at, x0, x1, v, 0.75, this.notesIn, 'notes', true));
+      car.connect(amp).connect(this.place(at, end - at, x0, x1, v, 0.75, this.notesIn, 'notes'));
       // A second, slightly detuned carrier on the same modulator: warmth, not a click.
       const twin = new OscillatorNode(ctx, { frequency: f, detune: 6 });
       const twinAmp = new GainNode(ctx, { gain: 0.45 });
@@ -804,6 +907,12 @@
       this.layer.notes.gain.setTargetAtTime(r.notes * curve(s.mixNotes ?? 0.75), t, T);
       this.farSend.shimmer.gain.setTargetAtTime(r.shimmer * curve(s.mixShimmer ?? 0.8), t, T);
       this.farSend.notes.gain.setTargetAtTime(r.notes * curve(s.mixNotes ?? 0.75), t, T);
+      if (this.speakers) {
+        for (const name of ['shimmer', 'notes']) {
+          const lvl = r[name] * curve(name === 'shimmer' ? (s.mixShimmer ?? 0.8) : (s.mixNotes ?? 0.75)) * this.bus[name].dry.gain.value;
+          for (const g of this.spaceFeeds[name]) g.gain.setTargetAtTime(lvl, t, T);
+        }
+      }
 
       const cut = this.key.bright * (1100 + 1300 * s.glow) + 500 * this.energy + 1500 * this.stir;
       this.padLP1.frequency.setTargetAtTime(cut, t, this.stir > 0.1 ? 0.3 : 2.5);
@@ -906,7 +1015,7 @@
     // 'hrtf' places bells and swells in 3D (for headphones); 'stereo' pans them.
     setSpatial(mode) {
       this.spatial = mode;
-      if (this.sound) this.sound.spatial = mode;
+      if (this.sound) this.sound.setSpatial(mode);
     }
 
     get keyName() {
