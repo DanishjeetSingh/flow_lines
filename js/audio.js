@@ -349,9 +349,9 @@
         st.partials.forEach(p => {
           const weight = Math.exp(-Math.pow(p.h - centre, 2) / 0.3) / Math.sqrt(p.h);
           const level = 0.065 * e * weight;
-          p.tone.gain.setTargetAtTime(level, t, 0.45);
+          p.tone.gain.setTargetAtTime(level, t, 0.18);
           const bw = (st.f * p.h) / this.windQ;
-          p.air.gain.setTargetAtTime(level * this.windBreath * 0.7 * Math.sqrt(half / bw), t, 0.45);
+          p.air.gain.setTargetAtTime(level * this.windBreath * 0.7 * Math.sqrt(half / bw), t, 0.18);
         });
         let pan = clamp01(w.bandX[i]) * 1.6 - 0.8;
         if (f.sym > 1) pan *= 0.5; // mirrored wind blows from both sides
@@ -549,7 +549,7 @@
         bandX[b] += sp * ((i % W) + 0.5) / W;
       }
       const w = this.wind;
-      const a = smooth(dt, 0.35);
+      const a = smooth(dt, 0.12); // quick: the strings should answer the waves, not trail them
       // WIND_REF: moving mass that counts as a full breeze (calibrated on
       // recorded traces: a typical scene sits around 0.4-0.7).
       const WIND_REF = 0.05;
