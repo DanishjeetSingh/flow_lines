@@ -12,10 +12,10 @@
  *            natural drift, chorus, a long hall), crossfading to a new chord
  *            every 9-16 s, slower when Evolution is low.
  *   bass     a soft sine under each chord.
- *   wind     the moving mass of strands blowing across strings tuned to the
- *            chord, like an aeolian harp. Where the strands flow sets which
- *            strings sing and where they sit in stereo; faster flow makes each
- *            string hop up its harmonics; turbulence makes it flutter.
+ *   wind     gusts playing strings tuned to the chord, like an aeolian harp:
+ *            where the visible strands flow hard, pressure builds on the
+ *            strings at that height and releases as soft swells, panned to
+ *            where the flow is. Faster flow swells more often and brighter.
  *
  * The first palette sets the key; later palettes change the mode over the
  * same root. Field changes land on a chord change, dragging opens the pad and
@@ -66,16 +66,13 @@
 
   // Which layers play, and how loud. "glass" is the live sound (chosen by ear
   // from three rendered directions); the others are kept for comparison.
-  // windStyle: 'harp' (clear singing tones with a whisper of air) or
-  // 'breath' (the same strings, much airier).
   const RECIPES = {
     bloom: { pad: 1.0, bass: 1.0, shimmer: 1.0, notes: 1.0, bell: false, wind: 0 },
     drift: { pad: 1.0, bass: 1.0, shimmer: 1.2, notes: 0.0, bell: false, wind: 0 },
-    glass: { pad: 0.5, bass: 0.8, shimmer: 0.9, notes: 1.0, bell: true, wind: 1.0, windStyle: 'harp' },
+    glass: { pad: 0.5, bass: 0.8, shimmer: 0.9, notes: 1.0, bell: true, wind: 1.0 },
   };
 
   const STRINGS = 7;
-  const PARTIALS = [1, 2, 3];
 
   const FADE_IN = new Float32Array(64).map((_, i) => Math.sin(Math.PI / 2 * i / 63));
   const FADE_OUT = new Float32Array(64).map((_, i) => Math.cos(Math.PI / 2 * i / 63));
@@ -147,7 +144,6 @@
       // Wind, read from the frames: overall amount, speed of the moving mass,
       // how aligned it is, its sideways drift, and per-height bands.
       this.wind = { amount: 0, speed: 0, coherence: 0, drift: 0, bands: new Float32Array(STRINGS), bandX: new Float32Array(STRINGS).fill(0.5) };
-      this.gust = 0;
       this.build();
     }
 
@@ -276,88 +272,66 @@
       this.echoR.connect(echoLP).connect(this.echoFb).connect(this.echoL);
     }
 
-    // Wind: a set of strings the moving strands blow across. Like a real
-    // aeolian harp, each string sings one harmonic at a time (which one
-    // depends on the wind's speed), swells and flutters with the gusts, and
-    // carries a whisper of breath: a narrow band of noise around its tone.
+    // Wind: gusts play a set of strings tuned to the chord, like an aeolian
+    // harp. Wind pressure builds on each string (faster where the visible
+    // strands flow harder) and releases as a soft swell: a beating pair of
+    // tones that blooms over about a second, brightening as it opens, then
+    // fades. Nothing sustains and nothing glides: steady tones read as an
+    // organ, gliding ones as a theremin or a siren (earshot).
     buildWind() {
       const ctx = this.ctx;
-      const gain = v => new GainNode(ctx, { gain: v });
-      this.windIn = gain(1);
+      this.windIn = new GainNode(ctx, { gain: 1 });
       this.windIn.connect(this.layer.wind);
-      const len = ctx.sampleRate * 3;
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = this.rnd() * 2 - 1;
-      const src = new AudioBufferSourceNode(ctx, { buffer: buf, loop: true });
-      src.start(0);
-      const breath = this.recipe.windStyle === 'breath';
-      this.windBreath = breath ? 0.9 : 0.3; // how much of each partial is noise
-      this.windQ = breath ? 30 : 90;
-      this.strings = [];
-      for (let i = 0; i < STRINGS; i++) {
-        const out = gain(1);
-        const pan = new StereoPannerNode(ctx, { pan: (i / (STRINGS - 1) - 0.5) * 0.9 });
-        out.connect(pan).connect(this.windIn);
-        const f0 = 220 * (1 + i * 0.2);
-        const partials = PARTIALS.map((h, k) => {
-          // the tone: a sine with its own slow pitch wander, so partials beat
-          const osc = new OscillatorNode(ctx, { frequency: f0 * h, detune: (this.rnd() - 0.5) * 6 });
-          const wob = gain(3 + this.rnd() * 4);
-          this.drift[(i + k) % 3].connect(wob).connect(osc.detune);
-          const tone = gain(0);
-          osc.connect(tone).connect(out);
-          osc.start(0);
-          // the breath: noise through a narrow band at the same pitch
-          const bp = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: f0 * h, Q: this.windQ });
-          const air = gain(0);
-          src.connect(bp).connect(air).connect(out);
-          return { h, osc, tone, bp, air };
-        });
-        this.strings.push({ out, pan, partials, f: f0, flutter: 0 });
-      }
+      this.strings = Array.from({ length: STRINGS }, () => ({ pressure: this.rnd(), until: 0 }));
     }
 
-    // Strings follow the harmony: on every chord they glide to its tones.
-    retuneWind(at) {
+    windSwells(f, t, dt) {
+      const w = this.wind;
+      if (!this.recipe.wind || w.amount < 0.02) return;
       const ladder = this.chordLadder(55, 81, 0.6); // G3-A5
       const n = ladder.length;
+      const turb = 1 - w.coherence;
       this.strings.forEach((st, i) => {
+        const e = w.bands[i];
+        // Up to ~0.6 swells a second per string in a full gale; none in calm air.
+        st.pressure += e * e * (0.2 + 0.45 * w.speed) * dt * (0.7 + 0.6 * this.rnd());
+        if (st.pressure < 1 || t < st.until) return;
+        st.pressure = this.rnd() * 0.3;
         const midi = ladder[Math.round(i * (n - 1) / (STRINGS - 1))];
-        st.f = mtof(midi);
-        for (const p of st.partials) {
-          const fh = Math.min(st.f * p.h, this.ctx.sampleRate * 0.45);
-          p.bp.frequency.setTargetAtTime(fh, at, 0.7);
-          p.osc.frequency.setTargetAtTime(fh, at, 0.7);
-        }
+        let pan = clamp01(w.bandX[i]) * 1.6 - 0.8;
+        if (f.sym > 1 && this.rnd() < 0.5) pan = -pan;
+        const attack = 0.5 + 1.0 * (1 - turb) * this.rnd() + 0.3;   // gusty air blooms faster
+        const release = 2.5 + 3 * this.rnd();
+        this.swell(t + this.rnd() * 0.1, mtof(midi), 0.07 * (0.5 + 0.5 * e), pan, attack, release, w.speed);
+        st.until = t + attack * 0.8;
       });
+    }
+
+    swell(at, freq, peak, pan, attack, release, speed) {
+      const ctx = this.ctx;
+      const end = at + attack + release + 0.1;
+      const amp = new GainNode(ctx, { gain: 0 });
+      amp.gain.setValueAtTime(0, at);
+      amp.gain.linearRampToValueAtTime(peak, at + attack);
+      amp.gain.setTargetAtTime(0, at + attack, release / 4);
+      // The tone opens as it blooms and closes as it fades: brighter, never higher.
+      const tone = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: freq * 2, Q: 0.4 });
+      tone.frequency.setValueAtTime(freq * 2, at);
+      tone.frequency.linearRampToValueAtTime(freq * (2.6 + 1.6 * speed), at + attack);
+      tone.frequency.setTargetAtTime(freq * 2, at + attack, release / 3);
+      tone.connect(amp).connect(new StereoPannerNode(ctx, { pan })).connect(this.windIn);
+      const beat = 0.3 + this.rnd() * 0.4;
+      for (const [off, lvl, type] of [[0, 1, 'triangle'], [beat, 0.7, 'triangle'], [-beat * 0.5, 0.35, 'sine']]) {
+        const osc = new OscillatorNode(ctx, { type, frequency: freq + off });
+        osc.connect(new GainNode(ctx, { gain: lvl })).connect(tone);
+        osc.start(at);
+        osc.stop(end);
+      }
+      this.stats.swells = (this.stats.swells || 0) + 1;
     }
 
     windParams(f, t) {
       const s = f.settings;
-      const w = this.wind;
-      const turb = 1 - w.coherence;
-      const half = this.ctx.sampleRate / 2;
-      this.strings.forEach((st, i) => {
-        // Gusts: each string flutters on its own, deeper in turbulent flow.
-        st.flutter += (this.rnd() - 0.5) * 0.6 - st.flutter * 0.2;
-        const gust = Math.max(0, 1 + st.flutter * (0.3 + 0.7 * turb) + this.gust * 0.5);
-        const e = Math.pow(w.bands[i], 0.9) * gust;
-        // The harmonic it sings: higher as the wind speeds up, a little
-        // higher on the upper strings, crossfading as it hops.
-        const centre = 1 + 2.2 * w.speed + 0.25 * (i % 3) - 0.25;
-        st.partials.forEach(p => {
-          const weight = Math.exp(-Math.pow(p.h - centre, 2) / 0.3) / Math.sqrt(p.h);
-          const level = 0.065 * e * weight;
-          p.tone.gain.setTargetAtTime(level, t, 0.18);
-          const bw = (st.f * p.h) / this.windQ;
-          p.air.gain.setTargetAtTime(level * this.windBreath * 0.7 * Math.sqrt(half / bw), t, 0.18);
-        });
-        let pan = clamp01(w.bandX[i]) * 1.6 - 0.8;
-        if (f.sym > 1) pan *= 0.5; // mirrored wind blows from both sides
-        st.pan.pan.setTargetAtTime(pan, t, 0.6);
-      });
-      this.gust *= 0.9;
       this.layer.wind.gain.setTargetAtTime((this.recipe.wind || 0) * (s.mixWind ?? 0.75) ** 2, t, 0.4);
     }
 
@@ -430,7 +404,6 @@
       this.voices = [];
 
       this.degree = this.stats.chords === 0 ? 0 : this.pickDegree();
-      this.retuneWind(at);
       // Each chord sits at its own intensity, so the piece rises and falls.
       this.intensity = 0.7 + 0.3 * this.rnd();
       this.stats.chords++;
@@ -725,6 +698,7 @@
       }
       if (t >= this.nextChordAt) this.nextChord(Math.max(t, this.nextChordAt), s);
       this.shimmer(f, t, dt);
+      this.windSwells(f, t, dt);
       if (this.recipe.notes && t >= this.nextPhraseAt) {
         this.phrase(t + 0.05, 'idle', s);
         this.nextPhraseAt = t + (4 + this.rnd() * 6) / (0.65 + 0.7 * this.energy + 0.4 * this.flux);
@@ -734,7 +708,7 @@
     scatter(t) {
       if (this.recipe.notes) this.phrase(t + 0.05, 'rise', this.lastSettings || { spread: 0.3, speed: 0.5 });
       this.flux = 1;
-      this.gust = 1.5; // the scatter blows through the strings
+      for (const st of this.strings) st.pressure += 0.6; // the scatter blows through the strings
     }
 
     // Keys for generated palettes (app.js derives the mood from the colours).

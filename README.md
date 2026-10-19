@@ -69,12 +69,12 @@ Sound is off until you click the speaker (browsers don't allow audio before a cl
 - A soft synth pad holds the chords.
 - Small glassy tones come from the bright parts of the image. Height sets the pitch and left/right sets the pan. The more the picture is changing, the more tones there are.
 - Bells play a short phrase every so often, and a few notes when the field changes or you scatter.
-- The wind: a set of strings tuned to the chord, played by the moving mass of strands, like an aeolian harp. Where the strands flow decides which strings sing and where they sit left to right; faster flow makes each string climb its harmonics; turbulence makes it flutter.
+- The wind: gusts playing strings tuned to the chord, like an aeolian harp. Where the strands flow hard, pressure builds on the strings at that height and releases as soft swells, panned to where the flow is. Calm scenes stay quiet; fast, sweeping ones swell often.
 - The palette picks the musical mode, and the kaleidoscope adds echo.
 
 Nothing is prerecorded. It's all synthesized live in the browser with Web Audio.
 
-Claude can't hear, so it used [earshot](https://github.com/Leonxlnx/earshot) to listen to its own renders while designing the sound. It rendered three directions offline, I picked one by ear, and earshot helped track down a harsh organ-like tone I couldn't put a name to. The wind went the same way: the first version read as "white noise" and "vacuum cleaner", the second as "a singing bowl" and "a sustained glass harp tone".
+Claude can't hear, so it used [earshot](https://github.com/Leonxlnx/earshot) to listen to its own renders while designing the sound. It rendered three directions offline, I picked one by ear, and earshot helped track down a harsh organ-like tone I couldn't put a name to. The wind went the same way: the first version read as "white noise" and "vacuum cleaner", a later one as a theremin (I heard a siren), and the one that stayed reads as "a singing bowl" and "soft swelling glass harp tones".
 
 ## How it works
 
