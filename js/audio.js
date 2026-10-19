@@ -17,6 +17,11 @@
  *            strings at that height and releases as soft swells, panned to
  *            where the flow is. Faster flow swells more often and brighter.
  *
+ * Space: every chime, bell and swell sits where its strand is on screen and
+ * moves the way the flow there moves; sounds from faint, sparse areas sit
+ * further back (quieter, more hall). With Headphones on, bells and swells are
+ * placed in 3D around the listener (HRTF): height follows the screen too.
+ *
  * The first palette sets the key; later palettes change the mode over the
  * same root. Field changes land on a chord change, dragging opens the pad and
  * draws grains to your hand, the kaleidoscope adds echoes.
@@ -134,7 +139,9 @@
       this.stats = { grains: 0, notes: 0, chords: 0 };
       // Wind, read from the frames: overall amount, speed of the moving mass,
       // how aligned it is, its sideways drift, and per-height bands.
-      this.wind = { amount: 0, speed: 0, coherence: 0, drift: 0, bands: new Float32Array(STRINGS), bandX: new Float32Array(STRINGS).fill(0.5) };
+      this.wind = { amount: 0, speed: 0, coherence: 0, drift: 0, bands: new Float32Array(STRINGS), bandX: new Float32Array(STRINGS).fill(0.5), bandVX: new Float32Array(STRINGS) };
+      this.flowX = null; // per grid cell: which way (and how fast) the strands there move sideways, -1..1
+      this.spatial = opts.spatial || 'stereo';
       this.build();
     }
 
@@ -184,6 +191,13 @@
       for (const name of Object.keys(this.bus)) {
         this.layer[name] = gain(0);
         this.layer[name].connect(this.bus[name].input);
+      }
+      // Depth: far voices send extra to the hall, through a gain that follows
+      // their layer's level (so the mix sliders still rule them).
+      this.farSend = {};
+      for (const name of ['shimmer', 'notes', 'wind']) {
+        this.farSend[name] = gain(0);
+        this.farSend[name].connect(this.verbIn);
       }
 
       // Pad: two gentle low-passes (24 dB/oct together) that breathe slowly,
@@ -263,6 +277,55 @@
       this.echoR.connect(echoLP).connect(this.echoFb).connect(this.echoL);
     }
 
+    // Where a voice sits. x is -1..1 (left to right) and glides from x0 to x1
+    // over dur, y is 0..1 (bottom to top of the screen), near is 0..1 (far to
+    // close). Stereo: an equal-power pan that moves. Headphones: an HRTF
+    // panner around the listener (only for the longer voices: there are few
+    // of them, and each costs a small convolution).
+    place(at, dur, x0, x1, y, near, dest, layer, hrtf) {
+      const ctx = this.ctx;
+      const far = 1 - clamp01(near);
+      const input = new GainNode(ctx, { gain: 1 - 0.35 * far });
+      input.connect(new GainNode(ctx, { gain: 0.9 * far })).connect(this.farSend[layer]);
+      x0 = Math.max(-1, Math.min(1, x0));
+      x1 = Math.max(-1, Math.min(1, x1));
+      if (hrtf && this.spatial === 'hrtf') {
+        const pn = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, rolloffFactor: 0 });
+        const el = (clamp01(y) - 0.5) * 0.8;  // about +-23 degrees
+        const r = 1 + far;
+        const pos = x => {
+          const az = x * 1.4;                   // about +-80 degrees
+          return [r * Math.sin(az) * Math.cos(el), r * Math.sin(el), -r * Math.cos(az) * Math.cos(el)];
+        };
+        const a = pos(x0);
+        const b = pos(x1);
+        [pn.positionX, pn.positionY, pn.positionZ].forEach((param, k) => {
+          param.setValueAtTime(a[k], at);
+          param.linearRampToValueAtTime(b[k], at + dur);
+        });
+        input.connect(pn).connect(dest);
+      } else {
+        const sp = new StereoPannerNode(ctx, { pan: x0 * 0.85 });
+        sp.pan.setValueAtTime(x0 * 0.85, at);
+        sp.pan.linearRampToValueAtTime(x1 * 0.85, at + dur);
+        input.connect(sp).connect(dest);
+      }
+      return input;
+    }
+
+    // Sideways flow at a point of the screen (u, v in 0..1), -1..1.
+    flowAt(u, v) {
+      if (!this.flowX) return 0;
+      const i = Math.min(this.gridW - 1, Math.max(0, Math.floor(u * this.gridW)))
+        + this.gridW * Math.min(this.gridH - 1, Math.max(0, Math.floor(v * this.gridH)));
+      return this.flowX[i];
+    }
+
+    // With the kaleidoscope or a mirror on, half the voices come from the mirrored side.
+    mirrored(f) {
+      return (f.sym > 1 || f.mirror > 0) && this.rnd() < 0.5;
+    }
+
     // Wind: gusts play a set of strings tuned to the chord, like an aeolian
     // harp. Wind pressure builds on each string (faster where the visible
     // strands flow harder) and releases as a soft swell: a beating pair of
@@ -289,16 +352,19 @@
         if (st.pressure < 1 || t < st.until) return;
         st.pressure = this.rnd() * 0.3;
         const midi = ladder[Math.round(i * (n - 1) / (STRINGS - 1))];
-        let pan = clamp01(w.bandX[i]) * 1.6 - 0.8;
-        if (f.sym > 1 && this.rnd() < 0.5) pan = -pan;
         const attack = 0.5 + 1.0 * (1 - turb) * this.rnd() + 0.3;   // gusty air blooms faster
         const release = 2.5 + 3 * this.rnd();
-        this.swell(t + this.rnd() * 0.1, mtof(midi), 0.07 * (0.5 + 0.5 * e), pan, attack, release, w.speed);
+        // The swell drifts the way the strands at its height are flowing.
+        let x0 = clamp01(w.bandX[i]) * 2 - 1;
+        let x1 = x0 + w.bandVX[i] * (attack + release) * 0.3;
+        if (this.mirrored(f)) { x0 = -x0; x1 = -x1; }
+        const y = (i + 0.5) / STRINGS;
+        this.swell(t + this.rnd() * 0.1, mtof(midi), 0.07 * (0.5 + 0.5 * e), x0, x1, y, 0.4 + 0.6 * e, attack, release, w.speed);
         st.until = t + attack * 0.8;
       });
     }
 
-    swell(at, freq, peak, pan, attack, release, speed) {
+    swell(at, freq, peak, x0, x1, y, near, attack, release, speed) {
       const ctx = this.ctx;
       const end = at + attack + release + 0.1;
       const amp = new GainNode(ctx, { gain: 0 });
@@ -310,7 +376,7 @@
       tone.frequency.setValueAtTime(freq * 2, at);
       tone.frequency.linearRampToValueAtTime(freq * (2.6 + 1.6 * speed), at + attack);
       tone.frequency.setTargetAtTime(freq * 2, at + attack, release / 3);
-      tone.connect(amp).connect(new StereoPannerNode(ctx, { pan })).connect(this.windIn);
+      tone.connect(amp).connect(this.place(at, attack + release, x0, x1, y, near, this.windIn, 'wind', true));
       const beat = 0.3 + this.rnd() * 0.4;
       for (const [off, lvl, type] of [[0, 1, 'triangle'], [beat, 0.7, 'triangle'], [-beat * 0.5, 0.35, 'sine']]) {
         const osc = new OscillatorNode(ctx, { type, frequency: freq + off });
@@ -323,7 +389,9 @@
 
     windParams(f, t) {
       const s = f.settings;
-      this.layer.wind.gain.setTargetAtTime((this.recipe.wind || 0) * (s.mixWind ?? 0.75) ** 2, t, 0.4);
+      const wind = (this.recipe.wind || 0) * (s.mixWind ?? 0.75) ** 2;
+      this.layer.wind.gain.setTargetAtTime(wind, t, 0.4);
+      this.farSend.wind.gain.setTargetAtTime(wind, t, 0.4);
     }
 
     // ------------------------------------------------------------- music
@@ -502,15 +570,21 @@
       let ny = 0;
       const bands = new Float32Array(STRINGS);
       const bandX = new Float32Array(STRINGS);
+      const bandVX = new Float32Array(STRINGS);
+      if (!this.flowX || this.flowX.length !== n) this.flowX = new Float32Array(n);
       for (let i = 0; i < n; i++) {
         const sp = g[i * 4 + 2];
+        const d = g[i * 4 + 3];
         moving += sp;
-        mass += g[i * 4 + 3];
+        mass += d;
         nx += g[i * 4];
         ny += g[i * 4 + 1];
+        // mean sideways speed of the strands in this cell, in screen heights/s, about -1..1
+        this.flowX[i] = d > 1e-4 ? Math.max(-1, Math.min(1, g[i * 4] / d * k / 0.3)) : 0;
         const b = Math.min(STRINGS - 1, Math.floor(Math.floor(i / W) / H * STRINGS));
         bands[b] += sp;
         bandX[b] += sp * ((i % W) + 0.5) / W;
+        bandVX[b] += g[i * 4];
       }
       const w = this.wind;
       const a = smooth(dt, 0.12); // quick: the strings should answer the waves, not trail them
@@ -524,7 +598,10 @@
       const perBand = n / STRINGS;
       for (let b = 0; b < STRINGS; b++) {
         w.bands[b] = lerp(w.bands[b], clamp01(bands[b] / perBand * k / WIND_REF), a);
-        if (bands[b] > 1e-5) w.bandX[b] = lerp(w.bandX[b], bandX[b] / bands[b], a);
+        if (bands[b] > 1e-5) {
+          w.bandX[b] = lerp(w.bandX[b], bandX[b] / bands[b], a);
+          w.bandVX[b] = lerp(w.bandVX[b], Math.max(-1, Math.min(1, bandVX[b] / bands[b] * 2)), a);
+        }
       }
     }
 
@@ -561,13 +638,17 @@
         // Height picks the note.
         const n = ladder.length;
         const midi = ladder[Math.max(0, Math.min(n - 1, Math.round(clamp01(cell.v) * (n - 1) + (this.rnd() - 0.5) * 1.5)))];
-        let pan = clamp01(cell.u) * 1.6 - 0.8;
-        if (f.sym > 1 && this.rnd() < 0.5) pan = -pan; // kaleidoscope: mirrored sparkle
-        this.grain(t + this.rnd() * dt, midi, 0.02 + 0.05 * cell.k, pan, 0.45 + this.rnd() * 0.8);
+        const dur = 0.45 + this.rnd() * 0.8;
+        // The grain rides along with its strand, sideways, for its short life.
+        const drift = byHand ? p.vx * 0.4 : this.flowAt(cell.u, cell.v);
+        let x0 = clamp01(cell.u) * 2 - 1;
+        let x1 = x0 + drift * dur * 0.9;
+        if (this.mirrored(f)) { x0 = -x0; x1 = -x1; } // mirrored sparkle
+        this.grain(t + this.rnd() * dt, midi, 0.02 + 0.05 * cell.k, x0, x1, cell.v, byHand ? 0.9 : cell.k, dur);
       }
     }
 
-    grain(at, midi, level, pan, dur) {
+    grain(at, midi, level, x0, x1, y, near, dur) {
       const ctx = this.ctx;
       // Glass, not organ: an inharmonic modulator (2.76x, like a struck bar's
       // second mode) whose brightness fades during the grain. Harmonic
@@ -581,7 +662,7 @@
       mod.connect(idx).connect(osc.frequency);
       const env = new GainNode(ctx, { gain: 0 });
       const lvl = new GainNode(ctx, { gain: level });
-      osc.connect(env).connect(lvl).connect(new StereoPannerNode(ctx, { pan })).connect(this.shimmerIn);
+      osc.connect(env).connect(lvl).connect(this.place(at, dur, x0, x1, y, near, this.shimmerIn, 'shimmer', false));
       env.gain.setValueCurveAtTime(STRIKE, at, dur);
       osc.start(at);
       mod.start(at);
@@ -593,7 +674,7 @@
     // ------------------------------------------------------------- notes
 
     // Warm electric piano (two-operator FM with a faint tine), or a soft bell.
-    note(at, midi, vel, pan, u, v) {
+    note(at, midi, vel, x0, x1, u, v) {
       const ctx = this.ctx;
       const f = mtof(midi);
       const bell = this.recipe.bell;
@@ -609,8 +690,8 @@
       amp.gain.setValueAtTime(0, at);
       amp.gain.linearRampToValueAtTime(vel * 0.2, at + (bell ? 0.01 : 0.025));
       amp.gain.setTargetAtTime(0, at + 0.01, decay / 3);
-      car.connect(amp).connect(new StereoPannerNode(ctx, { pan })).connect(this.notesIn);
       const end = at + decay * 2.2;
+      car.connect(amp).connect(this.place(at, end - at, x0, x1, v, 0.75, this.notesIn, 'notes', true));
       // A second, slightly detuned carrier on the same modulator: warmth, not a click.
       const twin = new OscillatorNode(ctx, { frequency: f, detune: 6 });
       const twinAmp = new GainNode(ctx, { gain: 0.45 });
@@ -644,7 +725,9 @@
       const anchor = this.singer || this.hot;
       const k = Math.round(clamp01(anchor.v * 0.85 + 0.1) * (ladder.length - 1));
       const beat = 60 / (54 + 30 * s.speed);
-      const pan = clamp01(anchor.u) * 1.4 - 0.7;
+      let x0 = clamp01(anchor.u) * 2 - 1;
+      const drift = this.flowAt(anchor.u, anchor.v);
+      if (this.mirrored(this.lastFrame || {})) x0 = -x0;
       const shapes = kind === 'rise' ? [[0, 1, 2, 3, 4]]
         : kind === 'cadence' ? [[2, 1, 0], [0, 1, 2]]
         : [[0], [0, 1], [0, -1], [1, 0], [0, 2, 1], [0]];
@@ -653,7 +736,9 @@
       const vel = (kind === 'rise' ? 0.35 : 0.32 + 0.3 * this.energy) * (0.9 + this.rnd() * 0.2);
       shape.forEach((step, i) => {
         const idx = Math.max(0, Math.min(ladder.length - 1, k + step));
-        this.note(at + i * gap + (this.rnd() - 0.5) * 0.03, ladder[idx], vel * (1 - i * 0.08), pan, anchor.u, anchor.v);
+        // each note of the phrase starts a little further along the flow, and keeps drifting
+        const xs = x0 + drift * i * gap * 0.6;
+        this.note(at + i * gap + (this.rnd() - 0.5) * 0.03, ladder[idx], vel * (1 - i * 0.08), xs, xs + drift * 1.5, anchor.u, anchor.v);
       });
     }
 
@@ -667,6 +752,7 @@
      */
     perform(f, t) {
       const s = f.settings;
+      this.lastFrame = f;
       const dt = Math.min(0.25, f.dt || 1 / 60);
       if (f.palette !== this.keyId) {
         const first = this.keyId === null;
@@ -716,6 +802,8 @@
       this.layer.bass.gain.setTargetAtTime(r.bass * curve(s.mixBass ?? 0.7), t, T);
       this.layer.shimmer.gain.setTargetAtTime(r.shimmer * curve(s.mixShimmer ?? 0.8), t, T);
       this.layer.notes.gain.setTargetAtTime(r.notes * curve(s.mixNotes ?? 0.75), t, T);
+      this.farSend.shimmer.gain.setTargetAtTime(r.shimmer * curve(s.mixShimmer ?? 0.8), t, T);
+      this.farSend.notes.gain.setTargetAtTime(r.notes * curve(s.mixNotes ?? 0.75), t, T);
 
       const cut = this.key.bright * (1100 + 1300 * s.glow) + 500 * this.energy + 1500 * this.stir;
       this.padLP1.frequency.setTargetAtTime(cut, t, this.stir > 0.1 ? 0.3 : 2.5);
@@ -799,6 +887,7 @@
         field: s.field,
         palette: s.palette,
         sym: s.sym,
+        mirror: s.mirror,
         pointer: { ...s.pointer },
       };
     }
@@ -811,6 +900,13 @@
       this.sound = null;
       this.enabled = false;
       this.running = true;
+      this.spatial = 'stereo';
+    }
+
+    // 'hrtf' places bells and swells in 3D (for headphones); 'stereo' pans them.
+    setSpatial(mode) {
+      this.spatial = mode;
+      if (this.sound) this.sound.spatial = mode;
     }
 
     get keyName() {
@@ -854,7 +950,7 @@
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) throw new Error('Web Audio is not available');
       this.ctx = new Ctx({ latencyHint: 'interactive' });
-      this.sound = new FlowSound(this.ctx, { recipe: 'glass', seed: (Math.random() * 2 ** 31) | 0 });
+      this.sound = new FlowSound(this.ctx, { recipe: 'glass', seed: (Math.random() * 2 ** 31) | 0, spatial: this.spatial });
       this.analyser = new AnalyserNode(this.ctx, { fftSize: 2048 });
       this.sound.out.connect(this.analyser);
       await this.ctx.resume();

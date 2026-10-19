@@ -115,6 +115,7 @@
     auto: true,
     vectors: false,
     sound: false, // never restored from a link: browsers only allow audio after a click
+    headphones: false, // 3D sound; remembered on this device, not in links
     vol: 0.7,
     mixPad: 0.8,
     mixWind: 0.75,
@@ -249,6 +250,9 @@
   });
 
   const audio = window.FlowAudio ? new window.FlowAudio() : null;
+  // Headphones (3D sound) is about this device, so it lives in local storage.
+  try { settings.headphones = localStorage.getItem('flowlines.headphones') === '1'; } catch (e) { /* storage blocked */ }
+  audio?.setSpatial(settings.headphones ? 'hrtf' : 'stereo');
   const noteBuf = new Float32Array(32);
   const noteAgeBuf = new Float32Array(8);
 
@@ -377,6 +381,14 @@
     } else {
       live.fbOffSince = live.clock;
     }
+    syncUI();
+  }
+
+  function setHeadphones(on) {
+    settings.headphones = on;
+    audio?.setSpatial(on ? 'hrtf' : 'stereo');
+    try { localStorage.setItem('flowlines.headphones', on ? '1' : '0'); } catch (e) { /* storage blocked */ }
+    toast(on ? 'Headphones: 3D sound' : 'Speakers: stereo');
     syncUI();
   }
 
@@ -747,6 +759,7 @@
       { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
       { key: 'vectors', label: 'Field vectors', hint: 'D', on: v => { settings.vectors = v; } },
       { key: 'sound', label: 'Sound', hint: 'M', parent: '#soundToggles', on: v => setSound(v) },
+      { key: 'headphones', label: 'Headphones (3D sound)', hint: '', parent: '#soundToggles', on: v => setHeadphones(v) },
     ];
     for (const t of toggles) {
       const b = el('button', { class: 'toggle', type: 'button', role: 'switch', onclick: () => { t.on(!settings[t.key]); syncUI(); } },
@@ -755,6 +768,7 @@
       ui.toggles[t.key] = b;
     }
     ui.toggles.ripples.classList.add('sound-only'); // ripples come from notes
+    ui.toggles.headphones.classList.add('sound-only');
 
     const actions = [
       { label: 'Shuffle', key: 'R', run: shuffle },
@@ -1135,6 +1149,7 @@
         palette: settings.palette,
         sym: settings.sym,
         warp: settings.warp,
+        mirror: settings.mirror,
         pointer: { x: pointer.x, y: pointer.y, vx: pointer.vx, vy: pointer.vy, on: pointer.on, press: pointer.press },
       });
     }
