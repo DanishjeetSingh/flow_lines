@@ -14,6 +14,12 @@
     { id: 'charge', gl: 3, name: 'Magnetic', blurb: 'Field lines between charges' },
     { id: 'orbit', gl: 4, name: 'Orbits', blurb: 'Rings with a radial ripple' },
     { id: 'origin', gl: 5, name: 'Origin', blurb: 'The original 2024 formula, breathing' },
+    { id: 'stream', gl: 6, name: 'Stream', blurb: 'A steady wind past drifting obstacles' },
+    { id: 'silk', gl: 7, name: 'Silk', blurb: 'Long ribbons rippling across' },
+    { id: 'waves', gl: 8, name: 'Waves', blurb: 'Interfering waves from drifting sources' },
+    { id: 'cells', gl: 9, name: 'Cells', blurb: 'A foam of turning cells' },
+    { id: 'galaxy', gl: 10, name: 'Galaxy', blurb: 'Two spiral galaxies, turning opposite ways' },
+    { id: 'smoke', gl: 11, name: 'Smoke', blurb: 'A rising column breaking into curls' },
   ];
 
   const PALETTES = [
@@ -25,6 +31,24 @@
     { id: 'koi', name: 'Koi', stops: ['#0b1d2a', '#ef476f', '#ffd166', '#06d6a0', '#f4faff'] },
     { id: 'silver', name: 'Silver', stops: ['#262932', '#5f6577', '#a2a8b8', '#d9dde7', '#ffffff'] },
   ];
+
+  // Mirrors fold the screen, space warps bend it, then the kaleidoscope
+  // folds the result (see VIEW in shaders.js).
+  const MIRRORS = [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'Book' },
+    { value: 2, label: 'Quad' },
+    { value: 3, label: 'Prism' },
+  ];
+  const WARPS = [
+    { value: 0, label: 'Off' },
+    { value: 1, label: 'Tunnel' },
+    { value: 2, label: 'Tiles' },
+    { value: 3, label: 'Swirl' },
+  ];
+
+  // Keys for the fields, in order along the top row of the keyboard.
+  const FIELD_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='];
 
   const COUNTS = [
     { value: 16384, label: '16K' },
@@ -52,6 +76,7 @@
     { key: 'spread', label: 'Color spread', group: 'look' },
     { key: 'vol', label: 'Volume', group: 'sound' },
     { key: 'mixPad', label: 'Pad', group: 'sound' },
+    { key: 'mixWind', label: 'Wind', group: 'sound' },
     { key: 'mixShimmer', label: 'Shimmer', group: 'sound' },
     { key: 'mixNotes', label: 'Notes', group: 'sound' },
     { key: 'mixBass', label: 'Bass', group: 'sound' },
@@ -83,12 +108,16 @@
     glow: 0.42,
     spread: 0.18,
     sym: 0,
-    paper: false,
+    warp: 0,
+    mirror: 0,
+    feedback: false,
+    ripples: false,
     auto: true,
     vectors: false,
     sound: false, // never restored from a link: browsers only allow audio after a click
     vol: 0.7,
     mixPad: 0.8,
+    mixWind: 0.75,
     mixShimmer: 0.8,
     mixNotes: 0.75,
     mixBass: 0.7,
@@ -99,8 +128,9 @@
 
   const HASH_KEYS = {
     field: 'f', palette: 'p', count: 'n', speed: 'sp', scale: 'sc', evolve: 'ev', trails: 'tr',
-    bright: 'ex', glow: 'gl', spread: 'cs', sym: 'k', paper: 'ink', auto: 'auto', seed: 's',
-    vol: 'vol', mixPad: 'mp', mixShimmer: 'msh', mixNotes: 'mn', mixBass: 'mb',
+    bright: 'ex', glow: 'gl', spread: 'cs', sym: 'k', warp: 'w', mirror: 'mi', feedback: 'fb', ripples: 'rp',
+    auto: 'auto', seed: 's',
+    vol: 'vol', mixPad: 'mp', mixWind: 'mw', mixShimmer: 'msh', mixNotes: 'mn', mixBass: 'mb',
   };
 
   function loadSettings() {
@@ -126,7 +156,9 @@
       s.palette = PALETTES[(Math.random() * PALETTES.length) | 0].id;
     }
     if (!FIELDS.some(f => f.id === s.field)) s.field = DEFAULTS.field;
-    if (!PALETTES.some(p => p.id === s.palette)) s.palette = DEFAULTS.palette;
+    if (!PALETTES.some(p => p.id === s.palette) && !/^gen-\d+$/.test(s.palette)) s.palette = DEFAULTS.palette;
+    if (!WARPS.some(w => w.value === s.warp)) s.warp = 0;
+    if (!MIRRORS.some(m => m.value === s.mirror)) s.mirror = 0;
     if (!COUNTS.some(c => c.value === s.count)) s.count = DEFAULTS.count;
     if (!SYMMETRY.some(c => c.value === s.sym)) s.sym = 0;
     for (const sl of SLIDERS) s[sl.key] = Math.min(1, Math.max(0, s[sl.key]));
@@ -156,13 +188,109 @@
   const $ = sel => document.querySelector(sel);
   const fieldIndex = id => FIELDS.findIndex(f => f.id === id);
   const fieldGl = id => FIELDS[fieldIndex(id)].gl;
-  const paletteOf = id => PALETTES.find(p => p.id === id);
+  const paletteOf = id => PALETTES.find(p => p.id === id) || generatedPalette(id);
   const lerp = (a, b, t) => a + (b - a) * t;
   const ease = t => t * t * (3 - 2 * t);
 
   function hexToRgb(hex) {
     const n = parseInt(hex.slice(1), 16);
     return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  }
+
+  // ------------------------------------------------------------ generated themes
+
+  // A palette made on the spot from a seed: five stops on a dark-to-bright
+  // ramp, built in OKLCH (a perceptual colour space) along a colour-harmony
+  // scheme, with guardrails against mud. Same seed, same palette, so a copied
+  // link brings it back.
+  function mulberry(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function oklchToLinear(L, C, h) {
+    const a = C * Math.cos(h * Math.PI / 180);
+    const b = C * Math.sin(h * Math.PI / 180);
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const k = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    return [
+      4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * k,
+      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * k,
+      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * k,
+    ];
+  }
+
+  // Out-of-gamut colours keep their lightness and hue and lose chroma.
+  function oklchToHex(L, C, h) {
+    let c = oklchToLinear(L, C, h);
+    while (C > 0 && c.some(v => v < -1e-4 || v > 1 + 1e-4)) {
+      C = Math.max(0, C - 0.004);
+      c = oklchToLinear(L, C, h);
+    }
+    const enc = v => {
+      v = Math.min(1, Math.max(0, v));
+      v = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+      return Math.round(v * 255).toString(16).padStart(2, '0');
+    };
+    return '#' + c.map(enc).join('');
+  }
+
+  const HUE_NAMES = [[15, 'Rose'], [40, 'Red'], [62, 'Copper'], [85, 'Amber'], [108, 'Gold'], [132, 'Lime'],
+    [160, 'Green'], [190, 'Teal'], [218, 'Cyan'], [250, 'Azure'], [278, 'Blue'], [298, 'Indigo'], [322, 'Violet'],
+    [346, 'Magenta'], [361, 'Rose']];
+  const hueName = h => HUE_NAMES.find(([lim]) => ((h % 360) + 360) % 360 < lim)[1];
+
+  const genCache = new Map();
+  function generatedPalette(id) {
+    const m = /^gen-(\d+)$/.exec(id || '');
+    if (!m) return null;
+    if (genCache.has(id)) return genCache.get(id);
+    const rnd = mulberry(Number(m[1]));
+    const h0 = rnd() * 360;
+    // Harmony: how far the hue travels from the dark end to the bright end.
+    const schemes = [[25, 3], [55, 4], [120, 2], [150, 2], [180, 1.5]];
+    let r = rnd() * schemes.reduce((t, [, w]) => t + w, 0);
+    let sweep = schemes[0][0];
+    for (const [deg, w] of schemes) if ((r -= w) <= 0) { sweep = deg; break; }
+    sweep *= rnd() < 0.5 ? -1 : 1;
+    const vivid = rnd();
+    const peak = 0.1 + 0.1 * vivid;
+    const Ls = [0.17, 0.39, 0.6, 0.8, 0.955];
+    const Cs = [0.6, 0.95, 1, 0.72, 0.2];
+    const stops = Ls.map((L0, i) => {
+      const t = i / 4;
+      let h = h0 + sweep * t * t * (3 - 2 * t);
+      const L = L0 + (rnd() - 0.5) * 0.04;
+      // Dark yellows read as olive mud: push them toward amber or green.
+      const hh = ((h % 360) + 360) % 360;
+      if (L < 0.5 && hh > 78 && hh < 128) h += hh < 103 ? -35 : 30;
+      return { L, C: peak * Cs[i], h };
+    });
+    const mid = ((stops[2].h % 360) + 360) % 360;
+    const warm = mid < 110 || mid > 330;
+    const a = hueName(stops[1].h);
+    const b = hueName(stops[3].h);
+    const pal = {
+      id,
+      name: a === b ? a : `${a} & ${b}`,
+      stops: stops.map(st => oklchToHex(st.L, st.C, st.h)),
+      generated: true,
+      // The music follows the colours: warm and vivid leans bright, cool and soft leans dark.
+      mood: {
+        root: Math.round(h0 / 30) % 12,
+        mode: warm ? (vivid > 0.5 ? (rnd() < 0.5 ? 'Lydian' : 'Mixolydian') : 'Ionian') : (vivid > 0.5 ? 'Dorian' : 'Aeolian'),
+        bright: 0.65 + 0.45 * vivid,
+      },
+    };
+    window.FlowSound?.defineKey(id, pal.mood);
+    genCache.set(id, pal);
+    return pal;
   }
 
   function paletteArray(id) {
@@ -218,6 +346,7 @@
 
   const audio = window.FlowAudio ? new window.FlowAudio() : null;
   const noteBuf = new Float32Array(32);
+  const noteAgeBuf = new Float32Array(8);
 
   const LIFE = 4.2;
   let dpr = 1;
@@ -258,12 +387,18 @@
     mix: 0,
     pal: paletteArray(settings.palette),
     palTarget: paletteArray(settings.palette),
-    paper: settings.paper ? 1 : 0,
     vectors: settings.vectors ? 1 : 0,
-    symA: settings.sym,
-    symB: settings.sym,
-    symMix: 0,
+    // The view (mirror + space warp + kaleidoscope), cross-faded from A to B on change.
+    viewA: { sym: settings.sym, warp: settings.warp, mir: settings.mirror },
+    viewB: { sym: settings.sym, warp: settings.warp, mir: settings.mirror },
+    viewMix: 0,
     symRot: 0,
+    warpT: 0,
+    fb: settings.feedback ? 1 : 0,
+    fbDir: 1,
+    fbSpin: 1,
+    fbOffSince: 0,
+    ripple: settings.ripples ? 1 : 0,
     time: Math.random() * 100,
     clock: 0,
     hueShift: 0,
@@ -294,8 +429,10 @@
   function setPalette(id) {
     settings.palette = id;
     live.palTarget = paletteArray(id);
+    if (paletteOf(id).generated) lastGenerated = id;
     syncUI();
   }
+  let lastGenerated = settings.palette.startsWith('gen-') ? settings.palette : null;
 
   function shuffle() {
     settings.seed = (Math.random() * 1e6) | 0;
@@ -312,22 +449,45 @@
     syncUI();
   }
 
-  function setPaper(on) {
-    settings.paper = on;
-    live.paper = on ? 1 : 0;
-    engine.clear();
-    document.body.classList.toggle('paper', on);
+  // Mirror, space warp and kaleidoscope together make the view; any change
+  // cross-fades from the view on screen to the new one (see the frame loop).
+  function setView(sym, warp, mir = settings.mirror) {
+    settings.sym = sym;
+    settings.warp = warp;
+    settings.mirror = mir;
+    if (live.viewMix > 0.5) live.viewA = live.viewB;
+    const a = live.viewA;
+    if (sym === a.sym && warp === a.warp && mir === a.mir && live.viewMix === 0) return syncUI();
+    live.viewB = { sym, warp, mir };
+    live.viewMix = 1e-4;
+    syncUI();
+  }
+  const setSym = n => setView(n, settings.warp);
+  const setWarp = w => setView(settings.sym, w);
+  const setMirror = m => setView(settings.sym, settings.warp, m);
+
+  function setFeedback(on) {
+    settings.feedback = on;
+    if (on) {
+      // Each session picks its own drift: pouring outward or inward, turning either way.
+      live.fbDir = Math.random() < 0.6 ? 1 : -1;
+      live.fbSpin = Math.random() < 0.5 ? 1 : -1;
+    } else {
+      live.fbOffSince = live.clock;
+    }
     syncUI();
   }
 
-  function setSym(n) {
-    settings.sym = n;
-    // Cross-fade from the fold on screen to the new one (see the frame loop).
-    if (live.symMix > 0.5) live.symA = live.symB;
-    if (n === live.symA && live.symMix === 0) return syncUI();
-    live.symB = n;
-    live.symMix = 1e-4;
+  function setRipples(on) {
+    settings.ripples = on;
     syncUI();
+  }
+
+  // A brand-new generated palette.
+  function newTheme({ quiet = false } = {}) {
+    const id = 'gen-' + ((Math.random() * 1e9) | 0);
+    setPalette(id);
+    if (!quiet) toast(paletteOf(id).name);
   }
 
   function cycle(list, current, dir) {
@@ -421,13 +581,15 @@
   const AUTO_RANGES = {
     speed: [0.3, 0.72], scale: [0.2, 0.75], evolve: [0.15, 0.6], trails: [0.62, 0.94],
     bright: [0.42, 0.66], glow: [0.25, 0.7], spread: [0.05, 0.6],
-    mixPad: [0.5, 0.95], mixShimmer: [0.45, 0.95], mixNotes: [0.4, 0.9], mixBass: [0.4, 0.85],
+    mixPad: [0.5, 0.95], mixWind: [0.45, 0.95], mixShimmer: [0.45, 0.95], mixNotes: [0.4, 0.9], mixBass: [0.4, 0.85],
   };
   const MOTION_KEYS = ['speed', 'scale', 'evolve', 'trails'];
   const LIGHT_KEYS = ['bright', 'glow', 'spread'];
   // The sound layers, never Volume: how loud it is stays yours.
-  const MIX_KEYS = ['mixPad', 'mixShimmer', 'mixNotes', 'mixBass'];
+  const MIX_KEYS = ['mixPad', 'mixWind', 'mixShimmer', 'mixNotes', 'mixBass'];
   const KALEIDO_FOLDS = [2, 3, 4, 6, 8];
+  // Taste rule: never more than two of kaleidoscope, mirror, warp and feedback at once.
+  const busyEffects = () => (settings.sym > 0) + (settings.mirror > 0) + (settings.warp > 0) + (settings.feedback ? 1 : 0);
   const HOLD_MS = 30000;
 
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -453,6 +615,7 @@
       this.next = {
         field: rand(6, 14), seed: rand(15, 35), palette: rand(10, 22), motion: rand(2, 6),
         light: rand(3, 8), mix: rand(8, 16), kaleido: rand(18, 40), scatter: rand(20, 45), stir: rand(8, 18),
+        warp: rand(25, 55), mirror: rand(30, 60), feedback: rand(20, 45), ripples: rand(15, 30),
       };
     },
 
@@ -484,7 +647,9 @@
       },
       palette() {
         if (isHeld('palette') || !auto.big()) return rand(2, 5);
-        setPalette(pick(PALETTES.filter(p => p.id !== settings.palette)).id);
+        // About half the time, a palette nobody has seen before.
+        if (Math.random() < 0.45) newTheme({ quiet: true });
+        else setPalette(pick(PALETTES.filter(p => p.id !== settings.palette)).id);
         return rand(12, 32);
       },
       motion() {
@@ -504,6 +669,7 @@
       kaleido() {
         if (isHeld('sym') || !auto.big()) return rand(2, 5);
         if (settings.sym === 0) {
+          if (busyEffects() >= 2) return rand(8, 16);
           setSym(pick(KALEIDO_FOLDS));
           return rand(10, 24);
         }
@@ -517,6 +683,45 @@
       scatter() {
         scatter();
         return rand(28, 65);
+      },
+      // Space warps in sessions, like the kaleidoscope.
+      warp() {
+        if (isHeld('warp') || !auto.big()) return rand(2, 5);
+        if (settings.warp === 0) {
+          if (busyEffects() >= 2) return rand(10, 20);
+          // Prism repeats the tunnel's far end in every triangle: costly at 4K, so not together.
+          setWarp(pick(settings.mirror === 3 ? [2, 3] : [1, 2, 3]));
+          return rand(12, 26);
+        }
+        setWarp(0);
+        return rand(30, 70);
+      },
+      // Mirrors in sessions too, a little rarer.
+      mirror() {
+        if (isHeld('mirror') || !auto.big()) return rand(2, 5);
+        if (settings.mirror === 0) {
+          if (busyEffects() >= 2) return rand(10, 20);
+          setMirror(pick(settings.warp === 1 ? [1, 2] : [1, 2, 3]));
+          return rand(12, 26);
+        }
+        setMirror(0);
+        return rand(35, 80);
+      },
+      feedback() {
+        if (isHeld('feedback')) return rand(5, 10);
+        if (!settings.feedback) {
+          if (busyEffects() >= 2) return rand(10, 20);
+          setFeedback(true);
+          return rand(8, 18);
+        }
+        setFeedback(false);
+        return rand(30, 75);
+      },
+      // Ripples only mean something with sound on.
+      ripples() {
+        if (isHeld('ripples') || !settings.sound) return rand(10, 20);
+        setRipples(!settings.ripples);
+        return settings.ripples ? rand(20, 45) : rand(25, 60);
       },
       // A ghost hand drags a slow arc through the fluid.
       stir() {
@@ -590,27 +795,39 @@
     return e;
   }
 
-  const ui = { fields: [], palettes: [], sliders: {}, counts: [], syms: [], toggles: {} };
+  const ui = { fields: [], palettes: [], sliders: {}, counts: [], syms: [], mirrors: [], warps: [], toggles: {} };
 
   function buildUI() {
     const fieldsEl = $('#fields');
     FIELDS.forEach((f, i) => {
       const b = el('button', { class: 'chip', type: 'button', title: f.blurb, onclick: () => { hold('field'); setField(f.id); } },
-        `<span class="chip-key">${i + 1}</span><span class="chip-name">${f.name}</span>`);
+        `<span class="chip-key">${FIELD_KEYS[i]}</span><span class="chip-name">${f.name}</span>`);
       fieldsEl.appendChild(b);
       ui.fields.push(b);
     });
 
     const palEl = $('#palettes');
+    const strip = stops => `--g: linear-gradient(90deg, ${stops.map((c, i) => `${c} ${i * 20}% ${(i + 1) * 20}%`).join(', ')})`;
     PALETTES.forEach(p => {
       const b = el('button', {
         class: 'swatch', type: 'button', title: p.name, 'aria-label': p.name + ' palette',
-        style: `--g: linear-gradient(90deg, ${p.stops.map((c, i) => `${c} ${i * 20}% ${(i + 1) * 20}%`).join(', ')})`,
+        style: strip(p.stops),
         onclick: () => { hold('palette'); setPalette(p.id); },
       });
       palEl.appendChild(b);
       ui.palettes.push(b);
     });
+    // The latest generated palette, and a button that makes a new one.
+    ui.genSwatch = el('button', {
+      class: 'swatch gen', type: 'button', title: 'Generated palette', 'aria-label': 'Generated palette',
+      onclick: () => { hold('palette'); if (lastGenerated) setPalette(lastGenerated); else newTheme(); },
+    });
+    palEl.appendChild(ui.genSwatch);
+    ui.genStrip = strip;
+    palEl.appendChild(el('button', {
+      class: 'swatch new', type: 'button', title: 'New palette (G)', 'aria-label': 'Generate a new palette',
+      onclick: () => { hold('palette'); newTheme(); },
+    }, '+'));
 
     for (const sl of SLIDERS) {
       const wrap = el('label', { class: 'slider' },
@@ -640,9 +857,12 @@
     };
     segment($('#counts'), COUNTS, ui.counts, n => n !== settings.count && setCount(n));
     segment($('#syms'), SYMMETRY, ui.syms, n => { hold('sym'); setSym(n); });
+    segment($('#mirrors'), MIRRORS, ui.mirrors, m => { hold('mirror'); setMirror(m); });
+    segment($('#warps'), WARPS, ui.warps, w => { hold('warp'); setWarp(w); });
 
     const toggles = [
-      { key: 'paper', label: 'Ink on paper', hint: 'P', on: v => setPaper(v) },
+      { key: 'feedback', label: 'Feedback', hint: 'E', parent: '#effectToggles', on: v => { hold('feedback'); setFeedback(v); } },
+      { key: 'ripples', label: 'Ripples from notes', hint: '', parent: '#effectToggles', on: v => { hold('ripples'); setRipples(v); } },
       { key: 'auto', label: 'Autopilot', hint: 'A', on: v => { settings.auto = v; auto.reset(); toast(v ? 'Autopilot on' : 'Autopilot off'); } },
       { key: 'vectors', label: 'Field vectors', hint: 'D', on: v => { settings.vectors = v; } },
       { key: 'sound', label: 'Sound', hint: 'M', parent: '#soundToggles', on: v => setSound(v) },
@@ -653,6 +873,7 @@
       $(t.parent || '#toggles').appendChild(b);
       ui.toggles[t.key] = b;
     }
+    ui.toggles.ripples.classList.add('sound-only'); // ripples come from notes
 
     const actions = [
       { label: 'Shuffle', key: 'R', run: shuffle },
@@ -701,8 +922,17 @@
     live.dirty = true;
     ui.fields.forEach((b, i) => b.classList.toggle('active', FIELDS[i].id === settings.field));
     ui.palettes.forEach((b, i) => b.classList.toggle('active', PALETTES[i].id === settings.palette));
+    const gen = lastGenerated && paletteOf(lastGenerated);
+    ui.genSwatch.classList.toggle('empty', !gen);
+    if (gen) {
+      ui.genSwatch.setAttribute('style', ui.genStrip(gen.stops));
+      ui.genSwatch.title = gen.name + ' (generated)';
+    }
+    ui.genSwatch.classList.toggle('active', settings.palette === lastGenerated);
     ui.counts.forEach(({ b, value }) => b.classList.toggle('active', value === settings.count));
     ui.syms.forEach(({ b, value }) => b.classList.toggle('active', value === settings.sym));
+    ui.mirrors.forEach(({ b, value }) => b.classList.toggle('active', value === settings.mirror));
+    ui.warps.forEach(({ b, value }) => b.classList.toggle('active', value === settings.warp));
     for (const [k, b] of Object.entries(ui.toggles)) {
       b.classList.toggle('on', !!settings[k]);
       b.setAttribute('aria-checked', String(!!settings[k]));
@@ -721,7 +951,6 @@
   }
 
   buildUI();
-  document.body.classList.toggle('paper', settings.paper);
   setPanel(window.innerWidth > 720);
   syncUI();
 
@@ -760,13 +989,16 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.target.matches?.('input[type="text"], textarea')) return;
     const k = e.key.toLowerCase();
-    const n = Number(e.key);
-    if (n >= 1 && n <= FIELDS.length) { hold('field'); setField(FIELDS[n - 1].id); return; }
+    const fi = FIELD_KEYS.indexOf(e.key);
+    if (fi >= 0 && fi < FIELDS.length) { hold('field'); setField(FIELDS[fi].id); return; }
     switch (k) {
       case ' ': e.preventDefault(); togglePause(); break;
       case 'h': toggleUI(); break;
       case 'd': settings.vectors = !settings.vectors; syncUI(); break;
-      case 'p': setPaper(!settings.paper); break;
+      case 'w': hold('warp'); setWarp(cycle(WARPS, settings.warp, 1)); toast(settings.warp ? WARPS[settings.warp].label : 'Space warp off'); break;
+      case 'v': hold('mirror'); setMirror(cycle(MIRRORS, settings.mirror, 1)); toast(settings.mirror ? MIRRORS[settings.mirror].label + ' mirror' : 'Mirror off'); break;
+      case 'e': hold('feedback'); setFeedback(!settings.feedback); toast(settings.feedback ? 'Feedback on' : 'Feedback off'); break;
+      case 'g': hold('palette'); newTheme(); break;
       case 'a': ui.toggles.auto.click(); break;
       case 'r': hold('field'); shuffle(); break;
       case 's': snapshot(); break;
@@ -832,8 +1064,8 @@
   const startTime = last;
 
   const params = {
-    mouse: [0, 0], mouseVel: [0, 0], bg: [0.012, 0.012, 0.02], paperCol: [0.955, 0.94, 0.905],
-    arrowCol: [1, 0.36, 0.36],
+    mouse: [0, 0], mouseVel: [0, 0], bg: [0.012, 0.012, 0.02],
+    arrowCol: [1, 0.38, 0.38],
   };
 
   function loop(now) {
@@ -879,15 +1111,24 @@
       }
     }
 
-    // kaleidoscope cross-fade (keeps redrawing even while paused)
-    if (live.symMix > 0) {
-      live.symMix += rawDt / 1.5;
+    // view cross-fade (keeps redrawing even while paused)
+    if (live.viewMix > 0) {
+      live.viewMix += rawDt / 1.5;
       live.dirty = true;
-      if (live.symMix >= 1) {
-        live.symA = live.symB;
-        live.symMix = 0;
+      if (live.viewMix >= 1) {
+        live.viewA = live.viewB;
+        live.viewMix = 0;
       }
     }
+
+    // feedback and ripples glide in and out
+    const glideTo = (key, target, rate) => {
+      const v = live[key] + (target - live[key]) * (1 - Math.exp(-rawDt * rate));
+      live[key] = Math.abs(v - target) < 0.002 ? target : v;
+      if (live[key] !== target) live.dirty = true;
+    };
+    glideTo('fb', settings.feedback ? 1 : 0, 1.5);
+    glideTo('ripple', settings.ripples ? 1 : 0, 2);
 
     // palette blend
     const k = 1 - Math.exp(-dt * 2.5);
@@ -915,7 +1156,8 @@
     if (!live.paused) {
       live.time += dt * MAP.evolve(settings.evolve);
       live.hueShift += dt * 0.006 * (0.3 + MAP.evolve(settings.evolve));
-      if (live.symA > 1 || live.symB > 1) live.symRot += dt * 0.025;
+      if (live.viewA.sym > 1 || live.viewB.sym > 1) live.symRot += dt * 0.025;
+      live.warpT += dt * (0.4 + 1.2 * settings.speed); // drives the warps and turns the prism
     }
     live.clock += rawDt;
 
@@ -944,16 +1186,26 @@
       mouseDown: pointer.press,
       decay: Math.pow(decay60, dt * 60),
       intensity,
-      paper: live.paper,
       hueShift: live.hueShift,
       spread: MAP.spread(settings.spread),
       palette: live.pal,
-      bloom: MAP.glow(settings.glow) * (settings.paper ? 0.35 : 1),
-      exposure: MAP.bright(settings.bright) * (settings.paper ? 0.7 : 1),
-      symA: live.symA,
-      symB: live.symB,
-      symMix: live.symMix > 0 ? ease(Math.min(1, live.symMix)) : 0,
+      bloom: MAP.glow(settings.glow),
+      exposure: MAP.bright(settings.bright),
+      symA: live.viewA.sym,
+      symB: live.viewB.sym,
+      warpA: live.viewA.warp,
+      warpB: live.viewB.warp,
+      mirA: live.viewA.mir,
+      mirB: live.viewB.mir,
+      symMix: live.viewMix > 0 ? ease(Math.min(1, live.viewMix)) : 0,
       symRot: live.symRot,
+      warpT: live.warpT,
+      // Feedback: how much of last frame survives each frame, and its drift.
+      feedback: live.fb > 0.002 ? Math.pow(0.955, dt * 60) * live.fb : 0,
+      feedbackIdle: !settings.feedback && live.fb === 0 && live.clock - live.fbOffSince > 10,
+      fbZoom: Math.pow(live.fbDir > 0 ? 0.993 : 1.006, dt * 60),
+      fbRot: 0.0035 * live.fbSpin * dt * 60,
+      ripple: live.ripple,
       vectors: live.vectors,
       // Above ~262K particles, baking the field into a grid is far cheaper
       // than evaluating it twice per particle.
@@ -965,14 +1217,14 @@
     params.mouse[1] = pointer.y;
     params.mouseVel[0] = pointer.vx;
     params.mouseVel[1] = pointer.vy;
-    params.arrowCol = settings.paper ? [0.75, 0.12, 0.16] : [1, 0.38, 0.38];
 
     // Sound: flares for the notes sounding now, tinted by the palette.
     const soundOn = !!(settings.sound && audio && !live.paused);
     params.sound = soundOn;
     if (soundOn) {
-      params.notes = audio.visualNotes(noteBuf);
-      params.noteTint = settings.paper ? [0.55, 0.55, 0.6] : hexToRgb(paletteOf(settings.palette).stops[4]);
+      params.notes = audio.visualNotes(noteBuf, noteAgeBuf);
+      params.noteAges = noteAgeBuf;
+      params.noteTint = hexToRgb(paletteOf(settings.palette).stops[4]);
     }
 
     // While paused the GPU idles: only redraw when something visible changed.
@@ -987,6 +1239,7 @@
         dt: rawDt,
         singers: snd && snd.singers,
         grid: snd && snd.grid,
+        wind: snd && snd.wind,
         gridScale: snd ? snd.gridScale : 1,
         gridW: snd ? snd.gridW : 1,
         gridH: snd ? snd.gridH : 1,
@@ -1001,13 +1254,14 @@
         scale: settings.scale,
         vol: settings.vol,
         mixPad: settings.mixPad,
+        mixWind: settings.mixWind,
         mixShimmer: settings.mixShimmer,
         mixNotes: settings.mixNotes,
         mixBass: settings.mixBass,
         field: settings.field,
         palette: settings.palette,
         sym: settings.sym,
-        paper: settings.paper,
+        warp: settings.warp,
         pointer: { x: pointer.x, y: pointer.y, vx: pointer.vx, vy: pointer.vy, on: pointer.on, press: pointer.press },
       });
     }
@@ -1027,7 +1281,8 @@
 
   // Handy for tinkering from the console.
   window.flowLines = {
-    engine, audio, settings, live, setField, setPalette, setCount, shuffle,
+    engine, audio, settings, live, setField, setPalette, setCount, shuffle, setView, setMirror, setFeedback,
+    setRipples, newTheme,
     // Step the simulation n frames synchronously (handy for testing in throttled tabs).
     warm(n = 120) {
       for (let i = 0; i < n; i++) frame(last + 1000 / 60);

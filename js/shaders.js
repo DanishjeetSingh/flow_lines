@@ -12,7 +12,8 @@
  *             into the trail buffer.
  *   bloom     one box-filtered pass down to a ~540p pyramid, then a
  *             dual-filter (Kawase) down/up chain.
- *   composite tonemap, bloom, kaleidoscope fold, vignette, grain.
+ *   composite tonemap, bloom, the view (space warp + kaleidoscope fold),
+ *             feedback echo, ripples from notes, vignette, dither.
  */
 (function () {
   'use strict';
@@ -198,13 +199,153 @@ vec2 fieldOrigin(vec2 q, float t, vec4 s) {
   return vec2(cos(ang), sin(ang));
 }
 
+// 6 — a steady stream past drifting round obstacles (potential flow around
+//     cylinders, with a little circulation so they shed curls). Inside each
+//     obstacle the strands spin like a trapped eddy.
+vec2 fieldStream(vec2 q, float t, vec4 s) {
+  float th = s.z + 0.35 * sin(t * 0.05 + s.w);
+  vec2 dir = vec2(cos(th), sin(th));
+  vec2 nrm = perp(dir);
+  vec2 v = dir;
+  vec2 inside = vec2(0.0);
+  float hole = 0.0;
+  for (int i = 0; i < 5; i++) {
+    float fi = float(i);
+    vec2 c = vec2(sin(t * (0.05 + fi * 0.011) + fi * 2.1 + s.w), cos(t * (0.04 + fi * 0.013) + fi * 1.3 + s.z))
+             * vec2(uAspect * 0.42, 0.42) * uScale;
+    float R = (0.06 + 0.06 * fract(fi * 0.618 + s.w * 0.37)) * uScale;
+    vec2 z = q - c;
+    vec2 zl = vec2(dot(z, dir), dot(z, nrm));      // in the stream's frame
+    float r2 = max(dot(zl, zl), R * R);
+    vec2 pert = -R * R * vec2(zl.x * zl.x - zl.y * zl.y, 2.0 * zl.x * zl.y) / (r2 * r2);
+    float gam = 0.9 * R * sin(t * 0.3 + fi * 1.7 + s.z);
+    pert += gam * perp(zl) / r2;
+    v += pert.x * dir + pert.y * nrm;
+    float k = 1.0 - smoothstep(R * 0.85, R * 1.05, length(z));
+    inside += k * perp(z) / R * (mod(fi, 2.0) < 1.0 ? 1.4 : -1.4);
+    hole = max(hole, k);
+  }
+  v = mix(v, inside, hole);
+  v += curlNoise(q * 1.6 + s.xy, t * 0.1) * 0.06;
+  return soften(v, 0.8);
+}
+
+// 7 — silk: long ribbons rippling across the screen. Calm, layered waves
+//     whose height and timing differ from sheet to sheet.
+vec2 fieldSilk(vec2 q, float t, vec4 s) {
+  float th0 = 0.5 * sin(s.z) + 0.15 * sin(t * 0.03);
+  vec2 p = vec2(cos(th0) * q.x + sin(th0) * q.y, -sin(th0) * q.x + cos(th0) * q.y);
+  float k = 11.0;
+  float y = p.y * k + s.w + 0.6 * sin(t * 0.07);
+  float phase = p.x * 2.4 - t * 0.8 + 1.6 * sin(p.y * 1.3 + t * 0.11 + s.z);
+  float ang = 0.55 * sin(phase) * (0.6 + 0.4 * sin(y * 0.5)) + 0.12 * snoise(vec3(p * 0.9 + s.xy, t * 0.04));
+  // Strands drift toward the ribbon centres (y = multiples of 2pi), so they
+  // bunch into bright bands with dark gaps between them.
+  float pull = -0.45 * sin(y);
+  vec2 v = vec2(cos(ang), sin(ang)) + vec2(0.0, pull);
+  return vec2(cos(th0) * v.x - sin(th0) * v.y, sin(th0) * v.x + cos(th0) * v.y) * 0.9;
+}
+
+// 8 — waves from three drifting sources interfere; strands run along the
+//     crests, drawing moiré fringes that slide as the sources move.
+vec2 fieldWaves(vec2 q, float t, vec4 s) {
+  vec2 grad = vec2(0.0);
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    vec2 c = vec2(sin(t * (0.04 + fi * 0.01) + fi * 2.4 + s.z), cos(t * (0.035 + fi * 0.012) + fi * 1.7 + s.w))
+             * vec2(uAspect * 0.4, 0.4) * uScale;
+    vec2 d = q - c;
+    float r = length(d) + 1e-3;
+    float ph = 11.0 * r - t * 2.2 + fi * 2.0;
+    grad += cos(ph) * (d / r) / sqrt(r + 0.12);
+  }
+  vec2 v = perp(grad) + grad * 0.2;
+  return soften(v * 1.4, 0.6);
+}
+
+vec2 cellHash(vec2 p) {
+  return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)))) * 43758.5453);
+}
+
+// 9 — a foam of cells (Voronoi): each cell turns on its own, and strands
+//     slide along the membranes where neighbours meet.
+vec2 fieldCells(vec2 q, float t, vec4 s) {
+  vec2 g = q * 2.3 + s.xy * 0.05;
+  vec2 ip = floor(g);
+  float d1 = 1e9;
+  float d2 = 1e9;
+  vec2 c1 = vec2(0.0);
+  vec2 c2 = vec2(0.0);
+  float spin = 1.0;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 cell = ip + vec2(float(i), float(j));
+      vec2 h = cellHash(cell + floor(s.zw * 7.0));
+      vec2 c = cell + 0.5 + 0.38 * sin(t * 0.25 + h * 6.2831);
+      float d = length(g - c);
+      if (d < d1) { d2 = d1; c2 = c1; d1 = d; c1 = c; spin = h.x < 0.5 ? 1.0 : -1.0; }
+      else if (d < d2) { d2 = d; c2 = c; }
+    }
+  }
+  vec2 r1 = g - c1;
+  vec2 swirl = perp(r1) / (length(r1) + 0.08) * spin;
+  vec2 along = perp(normalize(c2 - c1 + 1e-6));
+  along *= sign(dot(along, swirl) + 1e-6);
+  float onEdge = exp(-(d2 - d1) * 7.0);
+  return mix(swirl, along * 1.3, onEdge * 0.75);
+}
+
+// 10 — two spiral galaxies, turning opposite ways. A rotating density wave
+//      bends the flow in and out along logarithmic spiral arms.
+vec2 fieldGalaxy(vec2 q, float t, vec4 s) {
+  vec2 v = vec2(0.0);
+  for (int i = 0; i < 2; i++) {
+    float fi = float(i);
+    vec2 c = vec2(sin(t * 0.03 + fi * 3.1 + s.z) * 0.42 * uAspect, cos(t * 0.025 + fi * 2.3 + s.w) * 0.28)
+             * uScale * (fi < 0.5 ? 0.45 : 1.0);
+    vec2 d = q - c;
+    float r = length(d) + 1e-3;
+    float th = atan(d.y, d.x);
+    float spin = fi < 0.5 ? 1.0 : -1.0;
+    float arms = 2.0 + fi;
+    float wave = sin(arms * (th * spin - log(r) * 2.6) - t * 0.5 + s.z);
+    // The arms alternately squeeze strands in and let them out, so they
+    // bunch up along the spiral instead of draining into the core.
+    float a = 0.08 + 0.5 * wave;
+    vec2 dir = perp(d / r) * spin * cos(a) - (d / r) * sin(a);
+    float weight = 1.0 / (1.0 + r * r / (0.12 * uScale * uScale));
+    v += dir * weight;
+  }
+  return soften(v * 1.2, 0.6);
+}
+
+// 11 — smoke: a smooth rising column that breaks into curls as it climbs.
+vec2 fieldSmoke(vec2 q, float t, vec4 s) {
+  float sway = 0.25 * sin(t * 0.09 + s.z);
+  vec2 up = vec2(sin(sway), cos(sway));
+  vec2 side = perp(up);
+  float height = dot(q, up) / max(uScale, 0.3);
+  float across = dot(q, side) - 0.25 * uScale * sin(s.z * 3.0 + t * 0.04);
+  float turb = 0.12 + 1.1 * smoothstep(-0.35, 0.5, height);
+  // Low down, everything is drawn into the column; higher up it billows out.
+  float draw = (1.0 - smoothstep(-0.4, 0.3, height)) * 1.4;
+  vec2 c = curlNoise(q * 1.5 + s.xy - up * t * 0.08, t * 0.15) * 0.3;
+  return soften(up * 0.85 - side * across * draw + c * turb, 0.7);
+}
+
 vec2 fieldById(int id, vec2 q, float t, vec4 s) {
   if (id == 0) return fieldCurl(q, t, s);
   if (id == 1) return fieldWarp(q, t, s);
   if (id == 2) return fieldVortex(q, t, s);
   if (id == 3) return fieldCharge(q, t, s);
   if (id == 4) return fieldOrbit(q, t, s);
-  return fieldOrigin(q, t, s);
+  if (id == 5) return fieldOrigin(q, t, s);
+  if (id == 6) return fieldStream(q, t, s);
+  if (id == 7) return fieldSilk(q, t, s);
+  if (id == 8) return fieldWaves(q, t, s);
+  if (id == 9) return fieldCells(q, t, s);
+  if (id == 10) return fieldGalaxy(q, t, s);
+  return fieldSmoke(q, t, s);
 }
 
 // The field itself, including any cross-fade between two fields.
@@ -280,7 +421,6 @@ uniform float uDt;
 uniform float uLife;
 uniform int uFrame;
 uniform float uReset;
-uniform float uPaper;
 uniform float uHueShift;
 uniform float uSpread;
 layout(location = 0) out vec4 outState;
@@ -323,7 +463,6 @@ void main() {
   float ang = atan(dv.y, dv.x + 1e-9);
   float hue = ang / TAU + uHueShift + (fract(seed * 13.17) - 0.5) * uSpread;
   vec3 c = palette(abs(fract(hue) * 2.0 - 1.0));
-  c = mix(c, vec3(1.0) - c * 0.92, uPaper);
 
   // A few "hero" strands burn much brighter than the rest, giving depth.
   float hero = 0.07 + 3.6 * pow(fract(seed * 91.71), 10.0);
@@ -465,16 +604,22 @@ void main() {
   o = vec4(s / 12.0, 1.0);
 }`;
 
-  // Kaleidoscope fold, shared by the composite and the sound scan, so what
-  // you hear is exactly what you see.
-  const KALEIDO = `
+  // The view: how a point on screen maps to a point of the simulation. A
+  // mirror (book, quad, prism) folds the screen first, then a space warp
+  // (tunnel, tiles, swirl), then the kaleidoscope folds the result, so tiles
+  // become tiles of kaleidoscopes and a mirrored tunnel stays a tunnel. Shared by the composite,
+  // the sound scan and the field arrows, so what you see, hear and read agree.
+  // Expects uAspect and TAU to be declared already.
+  const VIEW = `
 uniform float uSymA;
 uniform float uSymB;
-uniform float uSymMix;
+uniform float uSymMix;   // cross-fade from view A to view B
 uniform float uSymRot;
-uniform float uAspect;
-
-const float TAU = 6.28318530718;
+uniform float uWarpA;    // 0 none, 1 tunnel, 2 tiles, 3 swirl
+uniform float uWarpB;
+uniform float uWarpT;    // warp clock (seconds, scaled by speed)
+uniform float uMirA;     // 0 none, 1 book, 2 quad, 3 prism
+uniform float uMirB;
 
 vec2 foldEdges(vec2 uv) { return 1.0 - abs(1.0 - mod(uv, 2.0)); }
 
@@ -488,25 +633,119 @@ vec2 kaleido(vec2 uv, float sym) {
   p = r * vec2(cos(a), sin(a));
   return foldEdges(p / vec2(uAspect, 1.0) + 0.5);
 }
+
+vec2 warp(vec2 uv, float w) {
+  if (w < 0.5) return uv;
+  vec2 p = (uv - 0.5) * vec2(uAspect, 1.0);
+  if (w < 1.5) {
+    // Tunnel: angle around the screen and 1/distance from its centre become
+    // the two image axes, so the picture lines a tube you fly down.
+    // The far end is capped (and faded out by viewShade): past that, the
+    // picture would only shimmer and thrash the texture cache.
+    float r = max(length(p), 0.03);
+    float a = atan(p.y, p.x);
+    return foldEdges(vec2(a / TAU * 2.0 + uWarpT * 0.004, 0.2 / r + uWarpT * 0.05));
+  }
+  if (w < 2.5) {
+    // Tiles: mirrored repeats, turning very slowly.
+    float c = cos(uWarpT * 0.015);
+    float s = sin(uWarpT * 0.015);
+    p = mat2(c, s, -s, c) * p * 2.6;
+    return foldEdges(p / vec2(uAspect, 1.0) + 0.5);
+  }
+  // Swirl: the middle twists around the centre, winding and unwinding slowly.
+  float r2 = dot(p, p);
+  float ang = 2.4 * sin(uWarpT * 0.12) * exp(-r2 / 0.22);
+  float c = cos(ang);
+  float s = sin(ang);
+  p = mat2(c, s, -s, c) * p;
+  return p / vec2(uAspect, 1.0) + 0.5;
+}
+
+// Mirrors fold the screen itself. Prism is a three-mirror kaleidoscope (the
+// toy): repeated reflections into one equilateral triangle, which tiles the
+// screen with mirrored copies.
+vec2 mirror(vec2 uv, float m) {
+  if (m < 0.5) return uv;
+  if (m < 1.5) return vec2(0.5 - abs(uv.x - 0.5), uv.y);
+  if (m < 2.5) return 0.5 - abs(uv - 0.5);
+  vec2 p = (uv - 0.5) * vec2(uAspect, 1.0);
+  float c = cos(uWarpT * 0.01);
+  float s = sin(uWarpT * 0.01);
+  p = mat2(c, s, -s, c) * p;
+  const float h = 0.16; // the triangle's inradius
+  const vec2 n0 = vec2(0.0, 1.0);
+  const vec2 n1 = vec2(-0.8660254, -0.5);
+  const vec2 n2 = vec2(0.8660254, -0.5);
+  for (int i = 0; i < 14; i++) {
+    float d0 = dot(p, n0) - h;
+    if (d0 > 0.0) p -= 2.0 * d0 * n0;
+    float d1 = dot(p, n1) - h;
+    if (d1 > 0.0) p -= 2.0 * d1 * n1;
+    float d2 = dot(p, n2) - h;
+    if (d2 > 0.0) p -= 2.0 * d2 * n2;
+  }
+  return p / vec2(uAspect, 1.0) + 0.5;
+}
+
+vec2 viewOf(vec2 uv, float sym, float w, float m) { return kaleido(warp(mirror(uv, m), w), sym); }
+
+// The view that dominates right now (for things that can't cross-fade).
+vec2 viewNow(vec2 uv) {
+  return uSymMix > 0.5 ? viewOf(uv, uSymB, uWarpB, uMirB) : viewOf(uv, uSymA, uWarpA, uMirA);
+}
+
+// Light of a view: the tunnel's far end fades into darkness (measured after
+// the mirror, so every mirrored copy of it fades too).
+float viewShade(vec2 uv, float w, float m) {
+  if (w < 0.5 || w > 1.5) return 1.0;
+  float r = length((mirror(uv, m) - 0.5) * vec2(uAspect, 1.0));
+  return smoothstep(0.03, 0.2, r);
+}
+
+// A direction in the simulation, as it appears on screen at uv: through the
+// inverse of the view's local stretch (mirrors flip it, the lens shrinks it).
+vec2 toScreenDir(vec2 uv, vec2 src, vec2 v) {
+  const float e = 0.0015;
+  vec2 sx = (viewNow(uv + vec2(e, 0.0)) - src) / e;
+  vec2 sy = (viewNow(uv + vec2(0.0, e)) - src) / e;
+  vec2 A = vec2(uAspect, 1.0);
+  mat2 J = mat2(sx * A / uAspect, sy * A); // d(src world) / d(screen world)
+  float det = J[0][0] * J[1][1] - J[0][1] * J[1][0];
+  if (abs(det) < 1e-4) return v;            // on a fold seam
+  return inverse(J) * v;
+}
 `;
 
-  const COMPOSITE_FS = HEADER + HASH + KALEIDO + `
+  const VIEW_ALONE = `
+uniform float uAspect;
+const float TAU = 6.28318530718;
+`;
+
+  const COMPOSITE_FS = HEADER + HASH + VIEW_ALONE + VIEW + `
 uniform sampler2D uAccum;
 uniform sampler2D uBloom;
 uniform vec2 uBloomTexel;
 uniform float uExposure;
 uniform float uBloomStr;
-uniform float uPaper;
 uniform float uTime;
 uniform vec3 uBg;
-uniform vec3 uPaperCol;
 // Sound: up to 8 recent notes as (u, v, intensity, radius). A positive radius
 // means the note sits on a strand (source space, so kaleidoscope copies flare
 // too); a negative one means a fixed spot on screen.
 uniform vec4 uNotes[8];
+uniform float uNoteAge[8];
 uniform vec3 uNoteTint;
+uniform float uRipple;     // 0..1: notes send rings through the image
+// Feedback: the previous frame, zoomed and turned, echoes behind this one.
+uniform sampler2D uPrev;
+uniform float uFeedback;   // per-frame persistence (0 = off)
+uniform float uFbZoom;
+uniform float uFbRot;
 in vec2 vUv;
 out vec4 o;
+
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 sampleHdr(vec2 uv) {
   vec3 acc = texture(uAccum, uv).rgb;
@@ -517,14 +756,34 @@ vec3 sampleHdr(vec2 uv) {
   return acc * uExposure + bloom * uBloomStr;
 }
 
+// Rings spreading out from notes on strands (source space).
+vec2 rippleAt(vec2 src) {
+  vec2 off = vec2(0.0);
+  for (int i = 0; i < 8; i++) {
+    vec4 nt = uNotes[i];
+    if (nt.z <= 0.0 || nt.w <= 0.0) continue;
+    float age = uNoteAge[i];
+    vec2 d = (src - nt.xy) * vec2(uAspect, 1.0);
+    float dist = length(d);
+    float R = 0.03 + age * 0.3;
+    float ring = exp(-pow((dist - R) / 0.03, 2.0));
+    off += d / (dist + 1e-4) * ring * cos((dist - R) * 90.0) * 0.007 * exp(-age * 1.8);
+  }
+  return off / vec2(uAspect, 1.0) * uRipple;
+}
+
 void main() {
-  // While the kaleidoscope changes, both folds are rendered and cross-faded.
-  vec2 uvA = kaleido(vUv, uSymA);
-  vec2 uvB = uvA;
+  // While the view changes, both are rendered and cross-faded.
+  vec2 uvA = viewOf(vUv, uSymA, uWarpA, uMirA);
+  if (uRipple > 0.0) uvA += rippleAt(uvA);
   vec3 hdr = sampleHdr(uvA);
+  float shade = viewShade(vUv, uWarpA, uMirA);
+  vec2 uvB = uvA;
   if (uSymMix > 0.0) {
-    uvB = kaleido(vUv, uSymB);
+    uvB = viewOf(vUv, uSymB, uWarpB, uMirB);
+    if (uRipple > 0.0) uvB += rippleAt(uvB);
     hdr = mix(hdr, sampleHdr(uvB), uSymMix);
+    shade = mix(shade, viewShade(vUv, uWarpB, uMirB), uSymMix);
   }
 
   // Sound: a brief flare wherever a note is struck.
@@ -535,53 +794,82 @@ void main() {
     vec2 d = ((nt.w > 0.0 ? src : vUv) - nt.xy) * vec2(uAspect, 1.0);
     hdr += uNoteTint * nt.z * exp(-dot(d, d) / (nt.w * nt.w));
   }
+
+  hdr *= shade;
+
   // Contrast curve carves dark channels between strands; then win back the
   // saturation that additive blending of many hues washes out.
   hdr = pow(hdr, vec3(1.3)) * 1.15;
-  float luma = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
+  float luma = dot(hdr, LUMA);
   hdr = max(mix(vec3(luma), hdr, 1.35), 0.0);
 
-  vec3 dark = uBg + (1.0 - uBg) * (1.0 - exp(-hdr));
-  vec3 paper = uPaperCol * exp(-hdr * 1.1);
-  vec3 col = mix(dark, paper, uPaper);
+  vec3 col = uBg + (1.0 - uBg) * (1.0 - exp(-hdr));
 
   vec2 vq = (vUv - 0.5) * vec2(1.0, 1.0 / max(uAspect, 0.6)) * 1.6;
   float vig = 1.0 - smoothstep(0.35, 1.25, length(vq));
-  col *= mix(1.0 - mix(0.38, 0.14, uPaper), 1.0, vig);
+  col *= mix(0.62, 1.0, vig);
+
+  // Feedback: last frame, slightly zoomed and turned, persists behind this
+  // one (the brighter of the two wins, so it never blows out).
+  if (uFeedback > 0.0) {
+    vec2 q = (vUv - 0.5) * vec2(uAspect, 1.0);
+    float c = cos(uFbRot);
+    float s = sin(uFbRot);
+    q = mat2(c, s, -s, c) * q * uFbZoom;
+    vec2 fuv = q / vec2(uAspect, 1.0) + 0.5;
+    float inside = step(0.0, fuv.x) * step(fuv.x, 1.0) * step(0.0, fuv.y) * step(fuv.y, 1.0);
+    vec3 prev = texture(uPrev, fuv).rgb;
+    float k = uFeedback * inside;
+    col = max(col, prev * k);
+  }
 
   // Triangular dither: just enough to hide banding, not visible as grain.
   vec2 seed = gl_FragCoord.xy + fract(uTime * 7.31) * 517.0;
   float n = hash12(seed) + hash12(seed + 71.3) - 1.0;
-  col += n * mix(1.0, 1.5, uPaper) / 255.0;
+  col += n / 255.0;
   o = vec4(col, 1.0);
 }`;
 
-  // Sound scan: averages the folded image into a small grid, read back
-  // asynchronously so chimes can ring where new structure appears.
-  const SOUND_GRID_FS = HEADER + KALEIDO + `
+  // Sound scan: the image as you see it (through the view), averaged into a
+  // small grid and read back asynchronously. Two outputs: the light (where
+  // chimes ring) and the wind (moving mass: which way and how fast the
+  // visible strands travel, weighted by how many there are).
+  const SOUND_GRID_FS = HEADER + NOISE + COMMON + FLOW + VIEW + `
 uniform sampler2D uSrc;
 uniform vec2 uGridRes;
 in vec2 vUv;
-out vec4 o;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 oWind;
 void main() {
-  float sym = uSymMix > 0.5 ? uSymB : uSymA;
   vec2 q = 0.25 / uGridRes;
-  vec3 s = texture(uSrc, kaleido(vUv + vec2(-q.x, -q.y), sym)).rgb
-         + texture(uSrc, kaleido(vUv + vec2(q.x, -q.y), sym)).rgb
-         + texture(uSrc, kaleido(vUv + vec2(-q.x, q.y), sym)).rgb
-         + texture(uSrc, kaleido(vUv + vec2(q.x, q.y), sym)).rgb;
-  o = vec4(s * 0.25, 1.0);
+  vec3 light = vec3(0.0);
+  vec4 wind = vec4(0.0);
+  for (int k = 0; k < 4; k++) {
+    vec2 uv = vUv + vec2(k % 2 == 0 ? -q.x : q.x, k < 2 ? -q.y : q.y);
+    vec2 src = viewNow(uv);
+    vec3 c = texture(uSrc, src).rgb;
+    light += c;
+    float d = dot(c, vec3(0.3, 0.6, 0.1));
+    vec2 v = toScreenDir(uv, src, flow(src * vec2(uAspect, 1.0)));
+    wind += vec4(v * d, length(v) * d, d);
+  }
+  o = vec4(light * 0.25, 1.0);
+  oWind = wind * 0.25;
 }`;
 
-  const ARROWS_VS = HEADER + NOISE + COMMON + FLOW + `
+  // Field arrows on a screen grid, read through the view: with the
+  // kaleidoscope or a warp on, they mirror and bend exactly like the image.
+  const ARROWS_VS = HEADER + NOISE + COMMON + FLOW + VIEW + `
 uniform int uCols;
 uniform float uCell;
 out float vShade;
 void main() {
   int id = gl_VertexID / 6;
   int k = gl_VertexID - id * 6;
-  vec2 base = (vec2(float(id % uCols), float(id / uCols)) + 0.5) * uCell;
-  vec2 v = flow(base);
+  vec2 base = (vec2(float(id % uCols), float(id / uCols)) + 0.5) * uCell; // screen, world units
+  vec2 uv = base / vec2(uAspect, 1.0);
+  vec2 src = viewNow(uv);
+  vec2 v = toScreenDir(uv, src, flow(src * vec2(uAspect, 1.0)));
   float m = length(v);
   vec2 dir = v / (m + 1e-6);
   vec2 side = perp(dir);
@@ -592,15 +880,16 @@ void main() {
   else if (k == 1 || k == 2 || k == 4) p = tip;
   else if (k == 3) p = tip - dir * L * 0.55 + side * L * 0.38;
   else p = tip - dir * L * 0.55 - side * L * 0.38;
-  vShade = clamp(m, 0.3, 1.0);
+  vShade = clamp(m, 0.3, 1.0) * (uSymMix > 0.5 ? viewShade(uv, uWarpB, uMirB) : viewShade(uv, uWarpA, uMirA));
   gl_Position = vec4(p.x / uAspect * 2.0 - 1.0, p.y * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
   const ARROWS_FS = HEADER + `
 uniform vec3 uArrowCol;
+uniform float uAlpha;
 in float vShade;
 out vec4 o;
-void main() { o = vec4(uArrowCol, 0.32 + 0.4 * vShade); }`;
+void main() { o = vec4(uArrowCol, (0.32 + 0.4 * vShade) * uAlpha); }`;
 
   window.FL_SHADERS = {
     fullscreenVS: FULLSCREEN_VS,

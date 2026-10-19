@@ -17,7 +17,9 @@
 
   // Sound. The first SINGERS particles (texels 0..SINGERS-1 of row 0) get
   // seeds that make them the brightest "hero" strands; the sound engine
-  // tracks them. The image is also summarised into a GRID_W x GRID_H grid.
+  // tracks them. The image is also summarised into a GRID_W x GRID_H grid of
+  // light, plus a matching grid of wind (where visible strands move, which
+  // way and how fast).
   // Both are read back asynchronously (pixel-pack buffer + fence), so the
   // CPU never waits on the GPU.
   const SINGERS = 8;
@@ -81,6 +83,7 @@
       v4: (name, a) => loc[name] && gl.uniform4f(loc[name], a[0], a[1], a[2], a[3]),
       v3v: (name, arr) => loc[name] && gl.uniform3fv(loc[name], arr),
       v4v: (name, arr) => loc[name] && gl.uniform4fv(loc[name], arr),
+      f1v: (name, arr) => loc[name] && gl.uniform1fv(loc[name], arr),
       tex: (name, tex, unit) => {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -165,6 +168,9 @@
       // segments are drawn ever brighter (x gain) and the composite divides
       // by gain. Rarely, the buffer is rescaled once and gain resets to 1.
       this.gain = 1;
+      // Feedback echo: two full-size 8-bit frames, made on first use.
+      this.fb = null;
+      this.fbCur = 0;
     }
 
 
@@ -256,6 +262,7 @@
 
       destroyTarget(gl, this.accum);
       this.bloom.forEach(t => destroyTarget(gl, t));
+      this.dropFeedback();
       this.accum = createTarget(gl, w, h, gl.RGBA16F, gl.HALF_FLOAT, gl.LINEAR);
       // The bloom pyramid starts 400-800px tall whatever the screen size, so
       // the glow looks the same everywhere and costs the same at 4K as at 1080p.
@@ -295,11 +302,23 @@
       this.pendingReset = true;
     }
 
-    setFoldUniforms(pr, p) {
+    dropFeedback() {
+      if (!this.fb) return;
+      this.fb.forEach(t => destroyTarget(this.gl, t));
+      this.fb = null;
+    }
+
+    // The view: mirror, space warp and kaleidoscope fold, with their cross-fade.
+    setViewUniforms(pr, p) {
       pr.f('uSymA', p.symA);
       pr.f('uSymB', p.symB);
       pr.f('uSymMix', p.symMix);
       pr.f('uSymRot', p.symRot);
+      pr.f('uWarpA', p.warpA);
+      pr.f('uWarpB', p.warpB);
+      pr.f('uWarpT', p.warpT);
+      pr.f('uMirA', p.mirA);
+      pr.f('uMirB', p.mirB);
       pr.f('uAspect', p.aspect);
     }
 
@@ -314,11 +333,24 @@
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         return b;
       };
+      // One pass writes both grids: light to attachment 0, wind to 1.
+      const grid = createTarget(gl, GRID_W, GRID_H, gl.RGBA16F, gl.HALF_FLOAT, gl.NEAREST);
+      const windTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, windTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, GRID_W, GRID_H, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, grid.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, windTex, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       this.snd = {
-        grid: createTarget(gl, GRID_W, GRID_H, gl.RGBA16F, gl.HALF_FLOAT, gl.NEAREST),
+        grid,
+        windTex,
         gridPbo: pbo(GRID_W * GRID_H * 16),
+        windPbo: pbo(GRID_W * GRID_H * 16),
         singerPbo: pbo(SINGERS * 16),
         gridData: new Float32Array(GRID_W * GRID_H * 4),
+        windData: new Float32Array(GRID_W * GRID_H * 4),
         singers: new Float32Array(SINGERS * 4),
         gridSync: null,
         singerSync: null,
@@ -367,6 +399,8 @@
       if (grid === 'read') {
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.gridPbo);
         gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, snd.gridData);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.windPbo);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, snd.windData);
         gl.deleteSync(snd.gridSync);
         snd.gridSync = null;
         snd.gridSeen = -1;
@@ -393,7 +427,8 @@
         snd.singerAt = snd.frame;
       }
 
-      // The folded image, summarised into a small grid (~10 per second).
+      // The image as seen, summarised into small light and wind grids
+      // (~10 per second).
       if (!snd.gridSync && snd.frame - snd.gridAt >= 2 * READBACK_AGE) {
         const src = this.bloom.find(l => l.h <= GRID_H * 4) || this.bloom[this.bloom.length - 1];
         const pr = this.progs.soundGrid;
@@ -401,12 +436,19 @@
         gl.bindFramebuffer(gl.FRAMEBUFFER, snd.grid.fbo);
         gl.viewport(0, 0, GRID_W, GRID_H);
         gl.useProgram(pr.program);
-        this.setFoldUniforms(pr, p);
+        this.setFlowUniforms(pr, p);
+        this.setViewUniforms(pr, p);
+        pr.f('uUseGrid', 0);
         pr.tex('uSrc', src.tex, 0);
         pr.v2('uGridRes', GRID_W, GRID_H);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.gridPbo);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
         gl.readPixels(0, 0, GRID_W, GRID_H, gl.RGBA, gl.FLOAT, 0);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, snd.windPbo);
+        gl.readBuffer(gl.COLOR_ATTACHMENT1);
+        gl.readPixels(0, 0, GRID_W, GRID_H, gl.RGBA, gl.FLOAT, 0);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
         gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
         snd.gridSync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
         snd.gridAt = snd.frame;
@@ -423,6 +465,7 @@
       const out = {
         singers: snd.singersFresh ? snd.singers : null,
         grid: snd.gridFresh ? snd.gridData : null,
+        wind: snd.gridFresh ? snd.windData : null,
         gridScale: snd.gridScale,
         gridW: GRID_W,
         gridH: GRID_H,
@@ -481,7 +524,6 @@
         pr.f('uLife', p.life);
         pr.i('uFrame', this.frameIndex++);
         pr.f('uReset', this.pendingReset ? 1 : 0);
-        pr.f('uPaper', p.paper);
         pr.f('uHueShift', p.hueShift);
         pr.f('uSpread', p.spread);
         pr.v3v('uPal', p.palette);
@@ -576,32 +618,63 @@
 
       if (p.sound) this.captureSound(p);
 
-      // 5. composite to the screen
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      // 5. composite. With feedback on, it renders into one of two offscreen
+      //    frames (reading the other as last frame), then that is copied to
+      //    the screen.
+      const feedback = p.feedback > 0;
+      if (feedback && !this.fb) {
+        this.fb = [0, 1].map(() => createTarget(gl, this.width, this.height, gl.RGBA8, gl.UNSIGNED_BYTE, gl.LINEAR));
+        for (const t of this.fb) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+          gl.clearColor(p.bg[0], p.bg[1], p.bg[2], 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+      }
+      const fbDst = feedback ? this.fb[1 - this.fbCur] : null;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbDst ? fbDst.fbo : null);
       gl.viewport(0, 0, this.width, this.height);
       gl.disable(gl.BLEND);
       pr = this.progs.composite;
       gl.useProgram(pr.program);
       pr.tex('uAccum', this.accum.tex, 0);
       pr.tex('uBloom', useBloom ? this.bloom[0].tex : this.accum.tex, 1);
+      pr.tex('uPrev', feedback ? this.fb[this.fbCur].tex : this.accum.tex, 2);
       const top = this.bloom[0];
       pr.v2('uBloomTexel', top ? 1 / top.w : 0, top ? 1 / top.h : 0);
       // Undo the deposit scale and lazy-decay gain on the way out.
       const toDisplay = 1 / (DEPOSIT_SCALE * this.gain);
       pr.f('uExposure', p.exposure * toDisplay);
       pr.f('uBloomStr', useBloom ? p.bloom * toDisplay : 0);
-      pr.f('uPaper', p.paper);
-      this.setFoldUniforms(pr, p);
+      this.setViewUniforms(pr, p);
       pr.f('uTime', p.clock);
       pr.v3('uBg', p.bg[0], p.bg[1], p.bg[2]);
-      pr.v3('uPaperCol', p.paperCol[0], p.paperCol[1], p.paperCol[2]);
-      pr.v4v('uNotes', p.sound && p.notes ? p.notes : NO_NOTES);
+
+      const notesOn = p.sound && p.notes;
+      pr.v4v('uNotes', notesOn ? p.notes : NO_NOTES);
+      if (notesOn && p.noteAges) pr.f1v('uNoteAge', p.noteAges);
       if (p.noteTint) pr.v3('uNoteTint', p.noteTint[0], p.noteTint[1], p.noteTint[2]);
+      pr.f('uRipple', notesOn ? p.ripple : 0);
+      pr.f('uFeedback', p.feedback);
+      pr.f('uFbZoom', p.fbZoom);
+      pr.f('uFbRot', p.fbRot);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (fbDst) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fbDst.fbo);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+        gl.blitFramebuffer(0, 0, this.width, this.height, 0, 0, this.width, this.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        this.fbCur = 1 - this.fbCur;
+      } else if (this.fb && p.feedbackIdle) {
+        this.dropFeedback(); // off for a while: give the memory back
+      }
 
       // 6. optional flow-field vectors, an homage to the old debug grid
       if (p.vectors > 0.01) {
-        const cell = 0.045;
+        // A finer grid when the view folds or warps the picture, so the
+        // mirrored structure reads in the arrows too.
+        const plain = p.symA < 2 && p.symB < 2 && p.warpA < 1 && p.warpB < 1 && p.mirA < 1 && p.mirB < 1;
+        const cell = plain ? 0.045 : 0.03;
         const cols = Math.ceil(p.aspect / cell);
         const rows = Math.ceil(1 / cell);
         gl.enable(gl.BLEND);
@@ -609,8 +682,11 @@
         pr = this.progs.arrows;
         gl.useProgram(pr.program);
         this.setFlowUniforms(pr, p);
+        this.setViewUniforms(pr, p);
+        pr.f('uUseGrid', 0);
         pr.i('uCols', cols);
         pr.f('uCell', cell);
+        pr.f('uAlpha', Math.min(1, p.vectors));
         pr.v3('uArrowCol', p.arrowCol[0], p.arrowCol[1], p.arrowCol[2]);
         gl.drawArrays(gl.LINES, 0, cols * rows * 6);
         gl.disable(gl.BLEND);

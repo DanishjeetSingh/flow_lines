@@ -14,20 +14,6 @@
   --gutter: 16px;
 }
 
-body.paper {
-  --bg: #f4f0e7;
-  --fg: #1a1a1a;
-  --muted: #6b6b6b;
-  --faint: #a3a3a3;
-  --panel: #fbf9f4;
-  --field: #efebe2;
-  --fill: #dcd6ca;
-  --line: #e2ddd2;
-  --hover: #e9e4da;
-  --invert-bg: #1a1a1a;
-  --invert-fg: #fbf9f4;
-}
-
 *,
 *::before,
 *::after {
@@ -254,7 +240,7 @@ body.panel-open .panel { display: flex; }
 
 .swatches {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(9, 1fr);
   gap: 4px;
 }
 
@@ -270,6 +256,19 @@ body.panel-open .panel { display: flex; }
   outline: 1px solid var(--fg);
   outline-offset: 2px;
 }
+
+/* the latest generated palette, and the button that makes a new one */
+.swatch.gen.empty { background: var(--field); }
+.swatch.new {
+  display: grid;
+  place-items: center;
+  background: var(--field);
+  color: var(--muted);
+  line-height: 1;
+}
+.swatch.new:hover { color: var(--fg); }
+
+#effectToggles { margin-top: 8px; }
 
 /* sliders: full-width scrub bars */
 
@@ -314,7 +313,6 @@ body.panel-open .panel { display: flex; }
 }
 
 .slider:hover .fill { filter: brightness(1.15); }
-body.paper .slider:hover .fill { filter: brightness(0.95); }
 
 /* segmented */
 

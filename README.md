@@ -22,12 +22,16 @@ Then visit http://localhost:8000. Any recent browser with WebGL2 works.
 
 ## Things to play with
 
-- **Six flow fields**: Marble, Curl Noise, Whirlpools, Magnetic, Orbits and Origin. Origin is the formula from the 2024 version, still in there.
-- **Seven palettes**. Each strand is colored by the direction it's moving.
+- **Twelve flow fields**: Marble, Curl Noise, Whirlpools, Magnetic, Orbits, Origin, Stream (wind past drifting obstacles), Silk (rippling ribbons), Waves (interfering ripples), Cells (a turning foam), Galaxy (two spirals) and Smoke (a rising column). Origin is the formula from the 2024 version, still in there.
+- **Seven palettes, plus endless new ones.** The `+` (or `G`) makes a palette on the spot from color-harmony rules, and the music picks a mood to match. Each strand is colored by the direction it's moving.
 - **Drag** to pull the fluid along. Hold still while dragging to spin up a vortex.
 - **Kaleidoscope**: 2 to 8 fold mirrored symmetry.
-- **Ink on paper**: the same thing drawn like ink on warm paper instead of light on black.
-- **Autopilot**: on by default. It changes fields, palettes, the kaleidoscope, the motion and the balance of the sound layers on its own random schedule (never your volume), and stirs the fluid now and then. Anything you touch yourself, it leaves alone for 30 seconds. Good as a screensaver.
+- **Mirror**: Book (a Rorschach fold down the middle), Quad, or Prism, a three-mirror kaleidoscope like the toy, which fills the screen with mirrored triangles.
+- **Space**: Tunnel (fly down a tube lined with the picture), Tiles (mirrored repeats, so with the kaleidoscope on you get tiles of kaleidoscopes) and Swirl (the middle twists and slowly unwinds). Mirror, Space and the kaleidoscope all combine, and every change cross-fades.
+- **Feedback**: the last frame, slightly zoomed and turned, echoes behind the new one, so everything pours into slow spirals.
+- **Ripples**: with sound on, notes send rings out through the image from where they ring.
+- **Field vectors** (`D`) shows the flow as arrows. They follow the kaleidoscope, mirror and warps too, so they always match what you see.
+- **Autopilot**: on by default. It changes fields, palettes, the effects, the motion and the balance of the sound layers on its own random schedule (never your volume), and stirs and scatters the fluid now and then. It never stacks more than two of kaleidoscope, mirror, space and feedback at once. Anything you touch yourself, it leaves alone for 30 seconds. Good as a screensaver.
 - **Copy link** saves the exact scene you're looking at, seed included, so someone else sees the same thing.
 
 Every visit starts on a random field and palette.
@@ -36,13 +40,16 @@ Every visit starts on a random field and palette.
 
 | Key | |
 |-----|---|
-| `1`–`6` | Field |
+| `1`–`9` `0` `-` `=` | Field |
 | `←` `→` | Palette |
+| `G` | New generated palette |
 | `Space` | Pause |
 | `M` | Sound |
 | `A` | Autopilot |
 | `K` | Kaleidoscope |
-| `P` | Ink on paper |
+| `V` | Mirror |
+| `W` | Space (tunnel, tiles, swirl) |
+| `E` | Feedback |
 | `X` | Scatter the particles |
 | `R` | New seed |
 | `D` | Show the field as arrows |
@@ -62,11 +69,12 @@ Sound is off until you click the speaker (browsers don't allow audio before a cl
 - A soft synth pad holds the chords.
 - Small glassy tones come from the bright parts of the image. Height sets the pitch and left/right sets the pan. The more the picture is changing, the more tones there are.
 - Bells play a short phrase every so often, and a few notes when the field changes or you scatter.
+- The wind: a set of strings tuned to the chord, played by the moving mass of strands, like an aeolian harp. Where the strands flow decides which strings sing and where they sit left to right; faster flow makes each string climb its harmonics; turbulence makes it flutter.
 - The palette picks the musical mode, and the kaleidoscope adds echo.
 
 Nothing is prerecorded. It's all synthesized live in the browser with Web Audio.
 
-Claude can't hear, so it used [earshot](https://github.com/Leonxlnx/earshot) to listen to its own renders while designing the sound. It rendered three directions offline, I picked one by ear, and earshot helped track down a harsh organ-like tone I couldn't put a name to.
+Claude can't hear, so it used [earshot](https://github.com/Leonxlnx/earshot) to listen to its own renders while designing the sound. It rendered three directions offline, I picked one by ear, and earshot helped track down a harsh organ-like tone I couldn't put a name to. The wind went the same way: the first version read as "white noise" and "vacuum cleaner", the second as "a singing bowl" and "a sustained glass harp tone".
 
 ## How it works
 
@@ -83,7 +91,7 @@ A few tricks keep it fast at 4K:
 - **The glow is computed at about 540p**, whatever your screen size, so it costs the same at 1080p and 4K.
 - **Lines are built in the shader** from instance IDs, with no vertex buffers.
 - **Nothing renders** while paused or when the tab is hidden.
-- **For the sound**, the GPU shrinks the image to a tiny 32×18 grid, and the browser reads that back a few frames later so it never has to wait on the GPU.
+- **For the sound**, the GPU shrinks the image to two tiny 32×18 grids, one of light and one of wind (which way the visible strands move, and how much), and the browser reads them back a few frames later so it never has to wait on the GPU.
 
 ### Performance
 
@@ -106,12 +114,12 @@ On a laptop, if it suddenly feels stuck at 30 fps, check your battery: Chrome's 
 |---|---|
 | `index.html` | The page |
 | `style.css` | The interface |
-| `js/shaders.js` | All the GPU code, including the six fields |
+| `js/shaders.js` | All the GPU code, including the twelve fields and the view (kaleidoscope, mirror, space) |
 | `js/engine.js` | The WebGL2 rendering pipeline |
 | `js/audio.js` | The sound engine |
 | `js/app.js` | Settings, controls, autopilot and the main loop |
 
-About 3,600 lines in total, with no libraries.
+About 4,450 lines in total, with no libraries.
 
 The browser console has a `flowLines` object if you want to poke at it, e.g. `flowLines.setField('orbit')` or `flowLines.setCount(1048576)`.
 
