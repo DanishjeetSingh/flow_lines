@@ -240,7 +240,7 @@ body.panel-open .panel { display: flex; }
 
 .swatches {
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 4px;
 }
 
@@ -256,17 +256,6 @@ body.panel-open .panel { display: flex; }
   outline: 1px solid var(--fg);
   outline-offset: 2px;
 }
-
-/* the latest generated palette, and the button that makes a new one */
-.swatch.gen.empty { background: var(--field); }
-.swatch.new {
-  display: grid;
-  place-items: center;
-  background: var(--field);
-  color: var(--muted);
-  line-height: 1;
-}
-.swatch.new:hover { color: var(--fg); }
 
 #effectToggles { margin-top: 8px; }
 

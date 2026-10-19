@@ -23,7 +23,7 @@ Then visit http://localhost:8000. Any recent browser with WebGL2 works.
 ## Things to play with
 
 - **Twelve flow fields**: Marble, Curl Noise, Whirlpools, Magnetic, Orbits, Origin, Stream (wind past drifting obstacles), Silk (rippling ribbons), Waves (interfering ripples), Cells (a turning foam), Galaxy (two spirals) and Smoke (a rising column). Origin is the formula from the 2024 version, still in there.
-- **Seven palettes, plus endless new ones.** The `+` (or `G`) makes a palette on the spot from color-harmony rules, and the music picks a mood to match. Each strand is colored by the direction it's moving.
+- **Seven palettes.** Each strand is colored by the direction it's moving.
 - **Drag** to pull the fluid along. Hold still while dragging to spin up a vortex.
 - **Kaleidoscope**: 2 to 8 fold mirrored symmetry.
 - **Mirror**: Book (a Rorschach fold down the middle), Quad, or Prism, a three-mirror kaleidoscope like the toy, which fills the screen with mirrored triangles.
@@ -42,7 +42,6 @@ Every visit starts on a random field and palette.
 |-----|---|
 | `1`–`9` `0` `-` `=` | Field |
 | `←` `→` | Palette |
-| `G` | New generated palette |
 | `Space` | Pause |
 | `M` | Sound |
 | `A` | Autopilot |

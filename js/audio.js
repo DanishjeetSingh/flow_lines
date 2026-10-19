@@ -55,15 +55,6 @@
     silver:      { root: 10, mode: 'Lydian',     steps: [0, 2, 4, 6, 7, 9, 11], bright: 1.1 },
   };
 
-  // Generated palettes bring their own mood (see app.js): any of these modes.
-  const MODE_STEPS = {
-    Ionian: [0, 2, 4, 5, 7, 9, 11],
-    Dorian: [0, 2, 3, 5, 7, 9, 10],
-    Mixolydian: [0, 2, 4, 5, 7, 9, 10],
-    Aeolian: [0, 2, 3, 5, 7, 8, 10],
-    Lydian: [0, 2, 4, 6, 7, 9, 11],
-  };
-
   // Which layers play, and how loud. "glass" is the live sound (chosen by ear
   // from three rendered directions); the others are kept for comparison.
   const RECIPES = {
@@ -709,11 +700,6 @@
       if (this.recipe.notes) this.phrase(t + 0.05, 'rise', this.lastSettings || { spread: 0.3, speed: 0.5 });
       this.flux = 1;
       for (const st of this.strings) st.pressure += 0.6; // the scatter blows through the strings
-    }
-
-    // Keys for generated palettes (app.js derives the mood from the colours).
-    static defineKey(id, { root, mode, bright }) {
-      KEYS[id] = { root, mode, steps: MODE_STEPS[mode] || MODE_STEPS.Ionian, bright };
     }
 
     params(f, t) {

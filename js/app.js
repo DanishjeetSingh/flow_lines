@@ -156,7 +156,7 @@
       s.palette = PALETTES[(Math.random() * PALETTES.length) | 0].id;
     }
     if (!FIELDS.some(f => f.id === s.field)) s.field = DEFAULTS.field;
-    if (!PALETTES.some(p => p.id === s.palette) && !/^gen-\d+$/.test(s.palette)) s.palette = DEFAULTS.palette;
+    if (!PALETTES.some(p => p.id === s.palette)) s.palette = DEFAULTS.palette;
     if (!WARPS.some(w => w.value === s.warp)) s.warp = 0;
     if (!MIRRORS.some(m => m.value === s.mirror)) s.mirror = 0;
     if (!COUNTS.some(c => c.value === s.count)) s.count = DEFAULTS.count;
@@ -188,110 +188,13 @@
   const $ = sel => document.querySelector(sel);
   const fieldIndex = id => FIELDS.findIndex(f => f.id === id);
   const fieldGl = id => FIELDS[fieldIndex(id)].gl;
-  const paletteOf = id => PALETTES.find(p => p.id === id) || generatedPalette(id);
+  const paletteOf = id => PALETTES.find(p => p.id === id);
   const lerp = (a, b, t) => a + (b - a) * t;
   const ease = t => t * t * (3 - 2 * t);
 
   function hexToRgb(hex) {
     const n = parseInt(hex.slice(1), 16);
     return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-  }
-
-  // ------------------------------------------------------------ generated themes
-
-  // A palette made on the spot from a seed: five stops on a dark-to-bright
-  // ramp, built in OKLCH (a perceptual colour space) along a colour-harmony
-  // scheme, with guardrails against mud. Same seed, same palette, so a copied
-  // link brings it back.
-  function mulberry(seed) {
-    let a = seed >>> 0;
-    return () => {
-      a = (a + 0x6d2b79f5) | 0;
-      let t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function oklchToLinear(L, C, h) {
-    const a = C * Math.cos(h * Math.PI / 180);
-    const b = C * Math.sin(h * Math.PI / 180);
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-    const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-    const k = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    return [
-      4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * k,
-      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * k,
-      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * k,
-    ];
-  }
-
-  // Out-of-gamut colours keep their lightness and hue and lose chroma.
-  function oklchToHex(L, C, h) {
-    let c = oklchToLinear(L, C, h);
-    while (C > 0 && c.some(v => v < -1e-4 || v > 1 + 1e-4)) {
-      C = Math.max(0, C - 0.004);
-      c = oklchToLinear(L, C, h);
-    }
-    const enc = v => {
-      v = Math.min(1, Math.max(0, v));
-      v = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
-      return Math.round(v * 255).toString(16).padStart(2, '0');
-    };
-    return '#' + c.map(enc).join('');
-  }
-
-  const HUE_NAMES = [[15, 'Rose'], [40, 'Red'], [62, 'Copper'], [85, 'Amber'], [108, 'Gold'], [132, 'Lime'],
-    [160, 'Green'], [190, 'Teal'], [218, 'Cyan'], [250, 'Azure'], [278, 'Blue'], [298, 'Indigo'], [322, 'Violet'],
-    [346, 'Magenta'], [361, 'Rose']];
-  const hueName = h => HUE_NAMES.find(([lim]) => ((h % 360) + 360) % 360 < lim)[1];
-
-  const genCache = new Map();
-  function generatedPalette(id) {
-    const m = /^gen-(\d+)$/.exec(id || '');
-    if (!m) return null;
-    if (genCache.has(id)) return genCache.get(id);
-    const rnd = mulberry(Number(m[1]));
-    const h0 = rnd() * 360;
-    // Harmony: how far the hue travels from the dark end to the bright end.
-    const schemes = [[25, 3], [55, 4], [120, 2], [150, 2], [180, 1.5]];
-    let r = rnd() * schemes.reduce((t, [, w]) => t + w, 0);
-    let sweep = schemes[0][0];
-    for (const [deg, w] of schemes) if ((r -= w) <= 0) { sweep = deg; break; }
-    sweep *= rnd() < 0.5 ? -1 : 1;
-    const vivid = rnd();
-    const peak = 0.1 + 0.1 * vivid;
-    const Ls = [0.17, 0.39, 0.6, 0.8, 0.955];
-    const Cs = [0.6, 0.95, 1, 0.72, 0.2];
-    const stops = Ls.map((L0, i) => {
-      const t = i / 4;
-      let h = h0 + sweep * t * t * (3 - 2 * t);
-      const L = L0 + (rnd() - 0.5) * 0.04;
-      // Yellows and yellow-greens below pale read as olive or khaki mud:
-      // move them out of that band, toward amber or toward green.
-      const hh = ((h % 360) + 360) % 360;
-      if (L < 0.75 && hh > 75 && hh < 135) h += hh < 105 ? 60 - hh : 150 - hh;
-      return { L, C: peak * Cs[i], h };
-    });
-    const mid = ((stops[2].h % 360) + 360) % 360;
-    const warm = mid < 110 || mid > 330;
-    const a = hueName(stops[1].h);
-    const b = hueName(stops[3].h);
-    const pal = {
-      id,
-      name: a === b ? a : `${a} & ${b}`,
-      stops: stops.map(st => oklchToHex(st.L, st.C, st.h)),
-      generated: true,
-      // The music follows the colours: warm and vivid leans bright, cool and soft leans dark.
-      mood: {
-        root: Math.round(h0 / 30) % 12,
-        mode: warm ? (vivid > 0.5 ? (rnd() < 0.5 ? 'Lydian' : 'Mixolydian') : 'Ionian') : (vivid > 0.5 ? 'Dorian' : 'Aeolian'),
-        bright: 0.65 + 0.45 * vivid,
-      },
-    };
-    window.FlowSound?.defineKey(id, pal.mood);
-    genCache.set(id, pal);
-    return pal;
   }
 
   function paletteArray(id) {
@@ -430,10 +333,8 @@
   function setPalette(id) {
     settings.palette = id;
     live.palTarget = paletteArray(id);
-    if (paletteOf(id).generated) lastGenerated = id;
     syncUI();
   }
-  let lastGenerated = settings.palette.startsWith('gen-') ? settings.palette : null;
 
   function shuffle() {
     settings.seed = (Math.random() * 1e6) | 0;
@@ -482,13 +383,6 @@
   function setRipples(on) {
     settings.ripples = on;
     syncUI();
-  }
-
-  // A brand-new generated palette.
-  function newTheme({ quiet = false } = {}) {
-    const id = 'gen-' + ((Math.random() * 1e9) | 0);
-    setPalette(id);
-    if (!quiet) toast(paletteOf(id).name);
   }
 
   function cycle(list, current, dir) {
@@ -648,9 +542,7 @@
       },
       palette() {
         if (isHeld('palette') || !auto.big()) return rand(2, 5);
-        // About half the time, a palette nobody has seen before.
-        if (Math.random() < 0.45) newTheme({ quiet: true });
-        else setPalette(pick(PALETTES.filter(p => p.id !== settings.palette)).id);
+        setPalette(pick(PALETTES.filter(p => p.id !== settings.palette)).id);
         return rand(12, 32);
       },
       motion() {
@@ -808,27 +700,15 @@
     });
 
     const palEl = $('#palettes');
-    const strip = stops => `--g: linear-gradient(90deg, ${stops.map((c, i) => `${c} ${i * 20}% ${(i + 1) * 20}%`).join(', ')})`;
     PALETTES.forEach(p => {
       const b = el('button', {
         class: 'swatch', type: 'button', title: p.name, 'aria-label': p.name + ' palette',
-        style: strip(p.stops),
+        style: `--g: linear-gradient(90deg, ${p.stops.map((c, i) => `${c} ${i * 20}% ${(i + 1) * 20}%`).join(', ')})`,
         onclick: () => { hold('palette'); setPalette(p.id); },
       });
       palEl.appendChild(b);
       ui.palettes.push(b);
     });
-    // The latest generated palette, and a button that makes a new one.
-    ui.genSwatch = el('button', {
-      class: 'swatch gen', type: 'button', title: 'Generated palette', 'aria-label': 'Generated palette',
-      onclick: () => { hold('palette'); if (lastGenerated) setPalette(lastGenerated); else newTheme(); },
-    });
-    palEl.appendChild(ui.genSwatch);
-    ui.genStrip = strip;
-    palEl.appendChild(el('button', {
-      class: 'swatch new', type: 'button', title: 'New palette (G)', 'aria-label': 'Generate a new palette',
-      onclick: () => { hold('palette'); newTheme(); },
-    }, '+'));
 
     for (const sl of SLIDERS) {
       const wrap = el('label', { class: 'slider' },
@@ -923,13 +803,6 @@
     live.dirty = true;
     ui.fields.forEach((b, i) => b.classList.toggle('active', FIELDS[i].id === settings.field));
     ui.palettes.forEach((b, i) => b.classList.toggle('active', PALETTES[i].id === settings.palette));
-    const gen = lastGenerated && paletteOf(lastGenerated);
-    ui.genSwatch.classList.toggle('empty', !gen);
-    if (gen) {
-      ui.genSwatch.setAttribute('style', ui.genStrip(gen.stops));
-      ui.genSwatch.title = gen.name + ' (generated)';
-    }
-    ui.genSwatch.classList.toggle('active', settings.palette === lastGenerated);
     ui.counts.forEach(({ b, value }) => b.classList.toggle('active', value === settings.count));
     ui.syms.forEach(({ b, value }) => b.classList.toggle('active', value === settings.sym));
     ui.mirrors.forEach(({ b, value }) => b.classList.toggle('active', value === settings.mirror));
@@ -999,7 +872,6 @@
       case 'w': hold('warp'); setWarp(cycle(WARPS, settings.warp, 1)); toast(settings.warp ? WARPS[settings.warp].label : 'Space warp off'); break;
       case 'v': hold('mirror'); setMirror(cycle(MIRRORS, settings.mirror, 1)); toast(settings.mirror ? MIRRORS[settings.mirror].label + ' mirror' : 'Mirror off'); break;
       case 'e': hold('feedback'); setFeedback(!settings.feedback); toast(settings.feedback ? 'Feedback on' : 'Feedback off'); break;
-      case 'g': hold('palette'); newTheme(); break;
       case 'a': ui.toggles.auto.click(); break;
       case 'r': hold('field'); shuffle(); break;
       case 's': snapshot(); break;
@@ -1283,7 +1155,7 @@
   // Handy for tinkering from the console.
   window.flowLines = {
     engine, audio, settings, live, setField, setPalette, setCount, shuffle, setView, setMirror, setFeedback,
-    setRipples, newTheme,
+    setRipples,
     // Step the simulation n frames synchronously (handy for testing in throttled tabs).
     warm(n = 120) {
       for (let i = 0; i < n; i++) frame(last + 1000 / 60);
